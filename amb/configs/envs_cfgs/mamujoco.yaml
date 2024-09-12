@@ -1,0 +1,4 @@
+scenario: HalfCheetah
+agent_conf: 6x1
+agent_obsk: 1
+# render_mode: "human"

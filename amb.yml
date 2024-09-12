@@ -1,0 +1,33 @@
+name: amb
+channels:
+  - pytorch
+  - nvidia
+  - defaults
+dependencies:
+  - python=3.9
+  - pytorch=2.0.0
+  - torchvision=0.15.0
+  - pytorch-cuda=11.8
+  - protobuf==3.20.3
+  - setproctitle
+  - pyyaml
+  - pip
+  - setuptools=63.4.1
+  - wheel=0.38.4
+  - matplotlib
+  - seaborn
+  - psutil
+  - Cython<3
+  - pip:
+    - omegaconf
+    - tensorboard==2.14.0
+    - gym==0.21.0
+    - pysc2==4.0.0
+    - mujoco
+    - gymnasium==0.29.1
+    - gymnasium-robotics==1.2.3
+    - pettingzoo==1.24.1
+    - supersuit==3.9.0
+    - nni
+    - wandb
+  

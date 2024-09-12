@@ -1,0 +1,2 @@
+scenario: simple_spread_v3 # choose from simple_spread_v3, simple_reference_v3, simple_speaker_listener_v4
+continuous_actions: True

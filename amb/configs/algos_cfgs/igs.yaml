@@ -1,0 +1,42 @@
+# seed:
+# whether to use the specified seed
+seed_specify: True
+# seed
+seed: 1
+# device:
+# whether to use CUDA
+cuda: True
+# whether to set CUDA deterministic
+cuda_deterministic: True
+# arg to torch.set_num_threads
+torch_threads: 4
+# train:
+# number of parallel environments for perturbation
+n_rollout_threads: 10
+# number of steps per environment per training data collection
+episode_length: 200
+# episodes of perturbation
+perturb_episodes: 20
+# render:
+# whether to use render
+use_render: False
+# number of episodes to render
+render_episodes: 10
+# attack:
+# the budget of perturbation (in L-inf norm)
+perturb_epsilon: 0.2
+# the iterations of gradient backwards for perturbations
+perturb_iters: 10
+# adaptively calculate the proper alpha
+adaptive_alpha: True
+# if adaptive_alpha=False, the budget of perturbation in every iteration
+perturb_alpha: 0.05
+# the criterion function when calculating the distance of actions
+criterion: default
+# the id of adversarial agents
+adv_agent_ids: [0]
+# the range of timestep that can be perturbed, e.g.: "1-10,15,20"
+perturb_timesteps: ~
+# logger:
+# logging directory
+log_dir: "./results"

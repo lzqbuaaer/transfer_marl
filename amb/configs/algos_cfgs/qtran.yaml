@@ -1,0 +1,103 @@
+# This is the configuration file for the MADDPG algorithm.
+# seed:
+# whether to use the specified seed
+seed_specify: True
+# seed
+seed: 1
+# device:
+# whether to use CUDA
+cuda: True
+# whether to set CUDA deterministic
+cuda_deterministic: True
+# arg to torch.set_num_threads
+torch_threads: 4
+# train:
+# number of parallel environments for training data collection
+n_rollout_threads: 10
+# max length of an episode
+episode_length: 70
+# number of total steps
+num_env_steps: 10000000
+# number of warmup steps
+warmup_steps: 5000
+# number of steps per train
+train_interval: 500
+# ratio of training iterations to train_interval
+update_per_train: 0.01
+# logging interval
+log_interval: 20000
+# evaluation interval
+eval_interval: 100000
+# whether to use linear learning rate decay
+use_linear_lr_decay: False
+# if set, load models from this directory; otherwise, randomly initialise the models
+model_dir: ~
+# eval:
+# whether to use evaluation
+use_eval: True
+# number of parallel environments for evaluation
+n_eval_rollout_threads: 2
+# number of episodes per evaluation
+eval_episodes: 32
+# render:
+# whether to use render
+use_render: False
+# number of episodes to render
+render_episodes: 10
+# model:
+# network parameters
+# hidden sizes for mlp module in the network
+hidden_sizes: [64, 64]
+# activation function, choose from sigmoid, tanh, relu, leaky_relu, selu
+activation_func: relu
+# whether to use feature normalization
+use_feature_normalization: True
+# initialization method for network parameters, choose from xavier_uniform_, orthogonal_, ...
+initialization_method: orthogonal_
+# optimizer parameters
+# actor learning rate
+lr: 0.0005
+# RMSProp alpha
+optim_alpha: 0.99
+# RMSProp epsilon
+optim_eps: 0.00001
+# recurrent parameters
+# whether to use rnn policy (data is chunked for training)
+use_recurrent_policy: False
+# number of recurrent layers
+recurrent_n: 1
+# epsilon greedy parameters
+epsilon_start: 1.0
+epsilon_finish: 0.05
+epsilon_anneal_time: 100000
+# mixer parameters
+mixer: "qtran_base"
+mixing_embed_dim: 64
+qtran_arch: "coma_critic"
+network_size: small
+# loss coefficient
+opt_loss: 1
+nopt_min_loss: 0.1
+# algo:
+# discount factor
+gamma: 0.99
+# off-policy buffer size
+buffer_size: 5000
+# training batch size
+batch_size: 1000
+# coefficient for target model soft update
+polyak: 0.005
+# the number of steps to look ahead
+n_step: 1
+# whether to clip gradient norm
+use_max_grad_norm: True
+# max gradient norm
+max_grad_norm: 10.0
+# whether to share parameter among actors
+share_param: True
+# whether to use policy active masks
+use_policy_active_masks: True
+# logger:
+# logging directory
+log_dir: "./results"
+use_wandb: False

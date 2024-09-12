@@ -1,0 +1,5 @@
+map_name: 3s_vs_4z
+state_type: FP # choose from FP (Feature Pruned) and EP (Environment Provided)
+replay_dir: "/root/albusli/adv_marl_benchmark-new/smac_renders"
+replay_prefix: ""
+
