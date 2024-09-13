@@ -13,7 +13,7 @@ from amb.models.base.distributions import FixedCategorical
 
 
 class PPOActor(nn.Module):
-    def __init__(self, args, obs_space, action_space, device=torch.device("cpu"), env_prior=None):
+    def __init__(self, args, obs_space, action_space, device=torch.device("cpu"), llm_env_prior=None, manual_env_prior=None):
         super(PPOActor, self).__init__()
         self.args = args
         self.gain = args["gain"]
@@ -25,11 +25,21 @@ class PPOActor(nn.Module):
         self.use_recurrent_policy = args["use_recurrent_policy"]
         self.recurrent_n = args["recurrent_n"]
         self.tpdv = dict(dtype=torch.float32, device=device)
-        self.env_prior = env_prior
-        if self.env_prior is None:
-            assert self.args.get("env_prior_length", 0) == 0
+        # self.env_prior = env_prior
+        # if self.env_prior is None:
+        #     assert self.args.get("env_prior_length", 0) == 0
+        # else:
+        #     assert len(self.env_prior) == self.args.get("env_prior_length", 0)
+        self.manual_env_prior = manual_env_prior
+        if self.manual_env_prior is None:
+            assert self.args.get("manual_env_prior_length", 0) == 0
         else:
-            assert len(self.env_prior) == self.args.get("env_prior_length", 0)
+            assert len(self.manual_env_prior) == self.args.get("manual_env_prior_length", 0)
+        self.llm_env_prior = llm_env_prior
+        if self.llm_env_prior is None:
+            assert self.args.get("llm_env_prior_length", 0) == 0
+        else:
+            assert len(self.llm_env_prior) == self.args.get("llm_env_prior_length", 0)
 
         # obs_alignment
         self.obs_align = args["obs_state_align"] if "obs_state_align" in args else False
@@ -66,6 +76,9 @@ class PPOActor(nn.Module):
                 self.recurrent_n,
                 self.initialization_method,
             )
+        
+        if self.manual_env_prior is not None:
+            self.manual_embedding_net = nn.Embedding(len(self.manual_env_prior), self.args["manual_embedding_length"])
 
         if self.args["static_env_net"]:
             self.static_env_net = EnvLayer(args)
@@ -131,8 +144,25 @@ class PPOActor(nn.Module):
             actor_features, rnn_states = self.rnn(actor_features, rnn_states, masks)
 
         if self.args["static_env_net"]:
-            assert self.env_prior is not None
-            env_prior = self.env_prior.repeat(actor_features.shape[0], 1)
+            # assert self.env_prior is not None
+            # env_prior = self.env_prior.repeat(actor_features.shape[0], 1)
+            # env_features = self.static_env_net(env_prior)
+            assert self.llm_env_prior is not None or self.manual_env_prior is not None
+            env_prior = None
+            if self.manual_env_prior is not None:
+                manual_index = torch.arange(len(self.manual_env_prior)).repeat(actor_features.shape[0], 1).to(**self.tpdv).long()
+                # print(manual_index.dtype)
+                manual_embedded = self.manual_embedding_net(manual_index)
+                manual_env_prior = self.manual_env_prior.repeat(actor_features.shape[0], 1).unsqueeze(1).float()
+                env_prior = torch.bmm(manual_env_prior, manual_embedded)
+                env_prior = torch.squeeze(env_prior)
+            if self.llm_env_prior is not None:
+                llm_env_prior = self.llm_env_prior.repeat(actor_features.shape[0], 1)
+                if self.manual_env_prior is None:
+                    env_prior = llm_env_prior
+                else:
+                    env_prior = torch.concatenate([env_prior, llm_env_prior], dim=-1)
+            # print(env_prior)
             env_features = self.static_env_net(env_prior)
             # # env_tensor = torch.zeros()
             # # env_features = self.static_env_net(env_tensor)

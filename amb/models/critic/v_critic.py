@@ -11,7 +11,7 @@ from amb.utils.model_utils import init, get_init_method
 class VCritic(nn.Module):
     """V Network. Outputs value function predictions given global states."""
 
-    def __init__(self, args, cent_obs_space, device=torch.device("cpu"), env_prior=None):
+    def __init__(self, args, cent_obs_space, device=torch.device("cpu"), llm_env_prior=None, manual_env_prior=None):
         """Initialize VCritic model.
         Args:
             args: (dict) arguments containing relevant model information.
@@ -30,11 +30,21 @@ class VCritic(nn.Module):
         self.state_align_len = args["state_align_len"] if "state_align_len" in args else 0
         self.use_static_env_net = args.get("static_env_net", False)
         
-        self.env_prior = env_prior
-        if self.env_prior is None:
-            assert args.get("env_prior_length", 0) == 0
+        # self.env_prior = env_prior
+        # if self.env_prior is None:
+        #     assert args.get("env_prior_length", 0) == 0
+        # else:
+        #     assert len(self.env_prior) == args.get("env_prior_length", 0)
+        self.manual_env_prior = manual_env_prior
+        if self.manual_env_prior is None:
+            assert args.get("manual_env_prior_length", 0) == 0
         else:
-            assert len(self.env_prior) == args.get("env_prior_length", 0)
+            assert len(self.manual_env_prior) == args.get("manual_env_prior_length", 0)
+        self.llm_env_prior = llm_env_prior
+        if self.llm_env_prior is None:
+            assert args.get("llm_env_prior_length", 0) == 0
+        else:
+            assert len(self.llm_env_prior) == args.get("llm_env_prior_length", 0)
         
         # TODO: state_alignment
         cent_obs_shape = get_shape_from_obs_space(cent_obs_space)
@@ -62,6 +72,9 @@ class VCritic(nn.Module):
                 self.recurrent_n,
                 self.initialization_method,
             )
+
+        if self.manual_env_prior is not None:
+            self.manual_embedding_net = nn.Embedding(len(self.manual_env_prior), args["manual_embedding_length"])
 
         def init_(m):
             return init(m, init_method, lambda x: nn.init.constant_(x, 0))
@@ -103,10 +116,29 @@ class VCritic(nn.Module):
             critic_features, rnn_states = self.rnn(critic_features, rnn_states, masks)
             
         if self.use_static_env_net:
-            assert self.env_prior is not None
-            env_prior = self.env_prior.repeat(critic_features.shape[0], 1)
+            # assert self.env_prior is not None
+            # env_prior = self.env_prior.repeat(critic_features.shape[0], 1)
+            # env_features = self.static_env_net(env_prior)
+
+            assert self.llm_env_prior is not None or self.manual_env_prior is not None
+            env_prior = None
+            if self.manual_env_prior is not None:
+                manual_index = torch.arange(len(self.manual_env_prior)).repeat(critic_features.shape[0], 1).to(**self.tpdv).long()
+                # print(manual_index.dtype)
+                manual_embedded = self.manual_embedding_net(manual_index)
+                manual_env_prior = self.manual_env_prior.repeat(critic_features.shape[0], 1).unsqueeze(1).float()
+                env_prior = torch.bmm(manual_env_prior, manual_embedded)
+                env_prior = torch.squeeze(env_prior)
+            if self.llm_env_prior is not None:
+                llm_env_prior = self.llm_env_prior.repeat(critic_features.shape[0], 1)
+                if self.manual_env_prior is None:
+                    env_prior = llm_env_prior
+                else:
+                    env_prior = torch.concatenate([env_prior, llm_env_prior], dim=-1)
             env_features = self.static_env_net(env_prior)
+            
             critic_features = torch.concatenate([critic_features, env_features], dim=-1)
+
         
         values = self.v_out(critic_features)
 

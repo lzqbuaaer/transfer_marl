@@ -3,4 +3,5 @@ __pycache__/
 /*.yaml
 /*.csv
 results/
+result_dual/
 nni/

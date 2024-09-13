@@ -48,38 +48,47 @@ class MAPPO:
         self.action_type = self.act_spaces[0].__class__.__name__
         
         # prior information of the environment
+        self.llm_env_prior = None
+        self.llm_env_prior_length = 0
         self.use_manual_env_prior = args.get("use_manual_env_prior", False)
         self.use_llm_env_prior = args.get("use_llm_env_prior", False)
         self.llm_env_prior_path = args.get("llm_env_prior_path", "./env_prior.npy")
         if os.path.exists(self.llm_env_prior_path) and self.use_llm_env_prior:
-            llm_env_prior = check(np.load(self.llm_env_prior_path)).to(**self.tpdv)
+            self.llm_env_prior = check(np.load(self.llm_env_prior_path)).to(**self.tpdv)
+            self.llm_env_prior_length = len(self.llm_env_prior)
         else:
             self.use_llm_env_prior = False
         
         self.env_prior = None
+        self.manual_env_prior = None
+        self.manual_env_prior_length = 0
         self.env_prior_length = 0
         if self.use_manual_env_prior and "manual_env_prior" in args:
             manual_env_prior = np.array(args["manual_env_prior"])
-            manual_env_prior = check(manual_env_prior).to(**self.tpdv)
-            if self.use_llm_env_prior:
-                self.env_prior = torch.cat([manual_env_prior, llm_env_prior])
-            else:
-                self.env_prior = manual_env_prior
+            self.manual_env_prior = check(manual_env_prior).to(**self.tpdv)
+            self.manual_env_prior_length = len(self.manual_env_prior)
+            # if self.use_llm_env_prior:
+            #     self.env_prior = torch.cat([manual_env_prior, self.llm_env_prior])
+            # else:
+            #     self.env_prior = manual_env_prior
+
         else:
             self.use_manual_env_prior = False
-            if self.use_llm_env_prior:
-                self.env_prior = llm_env_prior
-        if self.env_prior is not None:
-            self.env_prior_length = len(self.env_prior)
+            # if self.use_llm_env_prior:
+            #     self.env_prior = self.llm_env_prior
+        # if self.env_prior is not None:
+        #     self.env_prior_length = len(self.env_prior)
 
-        self.args["env_prior_length"] = self.env_prior_length
+        self.args["env_prior_length"] = self.llm_env_prior_length + self.manual_env_prior_length
+        self.args["llm_env_prior_length"] = self.llm_env_prior_length
+        self.args["manual_env_prior_length"] = self.manual_env_prior_length
         
         self.agents = []
         self.actors = []
         self.actor_optimizers = []
 
         if self.share_param:
-            agent = PPOAgent(args, obs_spaces[0], act_spaces[0], device=device, ally_num=ally_num, agent_type=agent_type, env_prior=self.env_prior)
+            agent = PPOAgent(args, obs_spaces[0], act_spaces[0], device=device, ally_num=ally_num, agent_type=agent_type, llm_env_prior=self.llm_env_prior, manual_env_prior=self.manual_env_prior)
             optimizer = torch.optim.Adam(
                 agent.actor.parameters(),
                 lr=self.lr,
@@ -103,7 +112,7 @@ class MAPPO:
                 self.actors.append(agent.actor)
                 self.actor_optimizers.append(optimizer)
 
-        self.critic = VCritic(args, self.share_obs_space, device=self.device, env_prior=self.env_prior)
+        self.critic = VCritic(args, self.share_obs_space, device=self.device, llm_env_prior=self.llm_env_prior, manual_env_prior=self.manual_env_prior)
         self.critic_optimizer = torch.optim.Adam(
             self.critic.parameters(),
             lr=self.critic_lr,

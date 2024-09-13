@@ -4,7 +4,7 @@ from amb.agents.base_agent import BaseAgent
 from amb.models.actor.ppo_actor import PPOActor
 
 class PPOAgent(BaseAgent):
-    def __init__(self, args, obs_space, act_space, device=torch.device("cpu"), ally_num=2, agent_type="victim", env_prior=None):
+    def __init__(self, args, obs_space, act_space, device=torch.device("cpu"), ally_num=2, agent_type="victim", llm_env_prior=None, manual_env_prior=None):
         # save arguments
         self.args = args
         self.device = device
@@ -13,9 +13,9 @@ class PPOAgent(BaseAgent):
 
         self.obs_space = obs_space
         self.act_space = act_space
-        print(env_prior)
+        print(llm_env_prior, manual_env_prior)
 
-        self.actor = PPOActor(args, self.obs_space, self.act_space, device=self.device, env_prior=env_prior)
+        self.actor = PPOActor(args, self.obs_space, self.act_space, device=self.device, llm_env_prior=llm_env_prior, manual_env_prior=manual_env_prior)
 
     def forward(self, obs, rnn_states, masks, available_actions=None):
         action_dist, rnn_states = self.actor(obs, rnn_states, masks, available_actions)

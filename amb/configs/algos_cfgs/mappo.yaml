@@ -134,5 +134,6 @@ action_align_len: 41 # largest map possible: 32-baneling, dim: 32 + 6 = 38
 obs_feat_layer_grad_on: False
 
 use_manual_env_prior: False
+manual_embedding_length: 10
 use_llm_env_prior: False
 llm_env_prior_path: "./env_prior.npy"

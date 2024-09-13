@@ -52,7 +52,7 @@ class EnvLayer(nn.Module):
 
         self.env_embedding = nn.Identity()
         self.mlp = MLPLayer(
-            args.get("env_prior_length", 0), self.hidden_sizes, self.initialization_method, self.activation_func
+            args['manual_embedding_length'] + args.get("llm_env_prior_length", 0), self.hidden_sizes, self.initialization_method, self.activation_func
         )
 
     def forward(self, x):
