@@ -338,4 +338,15 @@ map_info_dict = {
             "zealot": 5,
         },
     },
+    "2s3z_dual": {
+        "map_type": "stalkers_and_zealots",
+        "ally_type": {
+            "stalker": 2,
+            "zealot": 3,
+        },
+        "enem_type": {
+            "stalker": 2,
+            "zealot": 3,
+        },
+    },
 }

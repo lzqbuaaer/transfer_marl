@@ -5,3 +5,4 @@ __pycache__/
 results/
 result_dual/
 nni/
+*.txt

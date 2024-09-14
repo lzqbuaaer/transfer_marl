@@ -50,9 +50,16 @@ class EnvLayer(nn.Module):
         self.activation_func = args["activation_func"]
         self.hidden_sizes = [args.get("env_hidden_size", 128)]
 
+        self.env_prior_length = 0
+        if args["use_manual_env_prior"]:
+            self.env_prior_length += args['manual_embedding_length']
+        if args['use_llm_env_prior']:
+            self.env_prior_length += args.get("llm_env_prior_length", 0)
+        print(f'env_prior_length:{self.env_prior_length}')
+
         self.env_embedding = nn.Identity()
         self.mlp = MLPLayer(
-            args['manual_embedding_length'] + args.get("llm_env_prior_length", 0), self.hidden_sizes, self.initialization_method, self.activation_func
+            self.env_prior_length, self.hidden_sizes, self.initialization_method, self.activation_func
         )
 
     def forward(self, x):
