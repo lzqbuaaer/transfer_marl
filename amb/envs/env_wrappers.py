@@ -217,6 +217,8 @@ def shareworker(remote, parent_remote, env_fn_wrapper):
         #     remote.send((fr))
         elif cmd == "get_num_agents":
             remote.send((env.n_agents))
+        elif cmd == "get_num_enemies":
+            remote.send((getattr(env, 'n_enemies', 0)))
         elif cmd == "get_num_agents_dual":
             remote.send((env.n_angels, env.n_demons))
         else:
@@ -250,6 +252,8 @@ class ShareSubprocVecEnv(ShareVecEnv):
             remote.close()
         self.remotes[0].send(("get_num_agents", None))
         self.n_agents = self.remotes[0].recv()
+        self.remotes[0].send(("get_num_enemies", None))
+        self.n_enemies = self.remotes[0].recv()
         self.remotes[0].send(("get_spaces", None))
         observation_space, share_observation_space, action_space = self.remotes[0].recv()
         ShareVecEnv.__init__(
@@ -418,6 +422,7 @@ class ShareDummyVecEnv(ShareVecEnv):
         self.actions = None
         try:
             self.n_agents = env.n_agents
+            self.n_enemies = getattr(env, 'n_enemies', 0)
         except:
             pass
 

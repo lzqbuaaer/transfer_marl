@@ -6,3 +6,4 @@ results/
 result_dual/
 nni/
 *.txt
+*.pyc

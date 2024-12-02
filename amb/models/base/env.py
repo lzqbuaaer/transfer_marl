@@ -48,7 +48,7 @@ class EnvLayer(nn.Module):
         self.use_feature_normalization = args["use_feature_normalization"]
         self.initialization_method = args["initialization_method"]
         self.activation_func = args["activation_func"]
-        self.hidden_sizes = [args.get("env_hidden_size", 128)]
+        self.hidden_sizes = [args["hidden_sizes"][-1]]
 
         self.env_prior_length = 0
         if args["use_manual_env_prior"]:

@@ -86,6 +86,8 @@ class BaseRunner:
         # self.num_agents = self.envs.n_agents
         self.num_angels = self.envs.n_angels
         self.num_demons = self.envs.n_demons
+        algo_args["angel"]["n_agents"] = self.num_angels
+        algo_args["angel"]["n_enemies"] = self.num_demons
 
         self.action_type = self.envs.action_space[0][0].__class__.__name__
 

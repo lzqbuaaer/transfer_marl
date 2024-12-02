@@ -140,7 +140,7 @@ map_param_registry = {
         "unit_type_bits": 2,
         "map_type": "stalkers_and_zealots",
     },
-        "2s3z_dual": {
+    "2s3z_dual": {
         "n_agents": 5,
         "n_enemies": 5,
         "limit": 120,

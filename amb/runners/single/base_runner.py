@@ -119,6 +119,10 @@ class BaseRunner:
                 else None
             )
         self.num_agents = self.envs.n_agents
+        self.num_enemies = self.envs.n_enemies
+        algo_args["train"]["n_agents"] = self.num_agents
+        algo_args["train"]["n_enemies"] = self.num_enemies
+        
         self.action_type = self.envs.action_space[0].__class__.__name__
 
         print("share_observation_space: ", self.envs.share_observation_space)

@@ -53,7 +53,7 @@ class StarCraft2DualEnv(MultiAgentEnv):
         ports = [portpicker.pick_unused_port() for _ in range(4)]
         self.r = int(args["reverse_team"])
         del args["reverse_team"]
-        self.host_env = StarCraft2Env(args, **kwargs, host=True, ports=ports)
+        self.host_env = StarCraft2Env(args, **kwargs, host=True, ports=ports, obs_last_action=True, obs_agent_id=True)
         self.client_env = StarCraft2Env(args, **kwargs, host=False, ports=ports)
         self.host_pipe, self.host_child_pipe = Pipe()
         self.client_pipe, self.client_child_pipe = Pipe()

@@ -5,6 +5,7 @@ import numpy as np
 from torch.distributions import Categorical, Uniform
 from amb.models.base.cnn import CNNLayer
 from amb.models.base.mlp import MLPBase
+from amb.models.base.transformers import Transformer
 from amb.models.base.env import EnvLayer
 from amb.models.base.rnn import RNNLayer
 from amb.models.base.act import ACTLayer
@@ -24,6 +25,7 @@ class PPOActor(nn.Module):
 
         self.use_recurrent_policy = args["use_recurrent_policy"]
         self.recurrent_n = args["recurrent_n"]
+        self.actor_use_updet = args.get("actor_use_updet", False)
         self.tpdv = dict(dtype=torch.float32, device=device)
         # self.env_prior = env_prior
         # if self.env_prior is None:
@@ -41,19 +43,25 @@ class PPOActor(nn.Module):
         else:
             assert len(self.llm_env_prior) == self.args.get("llm_env_prior_length", 0)
 
-        # obs_alignment
-        self.obs_align = args["obs_state_align"] if "obs_state_align" in args else False
-        self.obs_align_len = args["obs_align_len"] if "obs_align_len" in args else 0
+        # # obs_alignment
+        # self.obs_align = args["obs_state_align"] if "obs_state_align" in args else False
+        # self.obs_align_len = args["obs_align_len"] if "obs_align_len" in args else 0
         obs_shape = get_shape_from_obs_space(obs_space)
-        if self.obs_align:
-            obs_shape = [self.obs_align_len]
+        # if self.obs_align:
+        #     obs_shape = [self.obs_align_len]
 
-        # action_alignment
-        self.action_space_align = args["action_space_align"] if "action_space_align" in args else False
-        self.action_align_len = args["action_align_len"] if "action_align_len" in args else 0
+        # # action_alignment
+        # self.action_space_align = args["action_space_align"] if "action_space_align" in args else False
+        # self.action_align_len = args["action_align_len"] if "action_align_len" in args else 0
         self.act_shape = get_onehot_shape_from_act_space(self.action_space)
-        if self.action_space_align:
-            self.act_shape = self.action_align_len
+        # if self.action_space_align:
+        #     self.act_shape = self.action_align_len
+        
+        if self.manual_env_prior is not None:
+            self.manual_embedding_net = nn.Embedding(len(self.manual_env_prior), self.args["manual_embedding_length"])
+
+        if self.args["static_env_net"]:
+            self.static_env_net = EnvLayer(args)
 
         if len(obs_shape) == 3:
             self.cnn = CNNLayer(
@@ -67,30 +75,45 @@ class PPOActor(nn.Module):
             self.cnn = nn.Identity()
             input_dim = obs_shape[0]
 
-        self.base = MLPBase(args, input_dim)
+        if not self.actor_use_updet:
+            self.base = MLPBase(args, input_dim)
 
-        if self.use_recurrent_policy:
-            self.rnn = RNNLayer(
-                self.hidden_sizes[-1],
-                self.hidden_sizes[-1],
-                self.recurrent_n,
+            if self.use_recurrent_policy:
+                self.rnn = RNNLayer(
+                    self.hidden_sizes[-1],
+                    self.hidden_sizes[-1],
+                    self.recurrent_n,
+                    self.initialization_method,
+                )
+                
+            self.act = ACTLayer(
+                action_space,
+                self.hidden_sizes[-1] + self.args.get("env_hidden_size", 128) \
+                    if self.args["static_env_net"] else self.hidden_sizes[-1],
                 self.initialization_method,
+                self.gain,
+                args,
             )
-        
-        if self.manual_env_prior is not None:
-            self.manual_embedding_net = nn.Embedding(len(self.manual_env_prior), self.args["manual_embedding_length"])
-
-        if self.args["static_env_net"]:
-            self.static_env_net = EnvLayer(args)
-
-        self.act = ACTLayer(
-            action_space,
-            self.hidden_sizes[-1] + self.args.get("env_hidden_size", 128) \
-                if self.args["static_env_net"] else self.hidden_sizes[-1],
-            self.initialization_method,
-            self.gain,
-            args,
-        )
+        else:
+            self.heads = args.get("obs_transformer_heads", 1)
+            self.depth = args.get("obs_transformer_depth", 2)
+            
+            self.token_dim = args.get("obs_token_dim", 5)
+            
+            self.own_feat = args.get("obs_own_feat", 5)
+            self.own_feat_length = self.own_feat
+            self.enemy_feat = args.get("obs_enemy_feat", 5)
+            self.enemy_feat_length = self.args["n_enemies"] * self.enemy_feat
+            self.ally_feat = args.get("obs_ally_feat", 5)
+            self.ally_feat_length = (self.args["n_agents"] - 1) * self.ally_feat
+            
+            self.own_feat_token_embedding = nn.Linear(self.own_feat, self.hidden_sizes[-1])
+            self.enemy_feat_token_embedding = nn.Linear(self.enemy_feat, self.hidden_sizes[-1])
+            self.ally_feat_token_embedding = nn.Linear(self.ally_feat, self.hidden_sizes[-1])
+            
+            self.transformer = Transformer(input_dim=self.token_dim, emb=self.hidden_sizes[-1], 
+                                           heads=self.heads, depth=self.depth, output_dim=self.hidden_sizes[-1])
+            self.act = nn.Linear(self.hidden_sizes[-1], 6)
 
         self.action_type = action_space.__class__.__name__
         if self.action_type == "Box":
@@ -102,11 +125,6 @@ class PPOActor(nn.Module):
     def sample(self, obs, available_actions=None):
         # obs_alignment
         obs = check(obs).to(**self.tpdv)
-        if self.obs_align:
-            thread_num = obs.shape[0]
-            obs_add_len = self.obs_align_len - obs.shape[1]
-            obs = torch.cat([obs, torch.zeros(thread_num, obs_add_len).to(**self.tpdv)], dim=1)
-        # print(f"In PPOActor's sample function, obs's shape is now {obs.shape}.")
 
         if available_actions is not None:
             available_actions = check(available_actions).to(**self.tpdv)
@@ -123,25 +141,31 @@ class PPOActor(nn.Module):
     def forward(self, obs, rnn_states, masks, available_actions=None):
         # obs_alignment
         obs = check(obs).to(**self.tpdv)
-        if self.obs_align:
-            thread_num = obs.shape[0]
-            obs_add_len = self.obs_align_len - obs.shape[1]
-            obs = torch.cat([obs, torch.zeros(thread_num, obs_add_len).to(**self.tpdv)], dim=1)
-        # print(f"In PPOActor's forward function, obs's shape is now {obs.shape}.")
         
         rnn_states = check(rnn_states).to(**self.tpdv)
         masks = check(masks).to(**self.tpdv)
         
         # action_alignment
         if available_actions is not None:
-            available_actions = check(available_actions).to(**self.tpdv) # （10, 10）==> (10, 41)
-        if self.action_space_align:
-            available_actions = torch.cat([available_actions, torch.zeros(available_actions.shape[0], self.action_align_len - available_actions.shape[1]).to(**self.tpdv)], dim=1)
+            available_actions = check(available_actions).to(**self.tpdv)
 
-        actor_features = self.base(self.cnn(obs))
+        if not self.actor_use_updet:
+            actor_features = self.base(self.cnn(obs))
 
-        if self.use_recurrent_policy:
-            actor_features, rnn_states = self.rnn(actor_features, rnn_states, masks)
+            if self.use_recurrent_policy:
+                actor_features, rnn_states = self.rnn(actor_features, rnn_states, masks)
+        else:
+            assert obs.shape[-1] == self.ally_feat_length + self.enemy_feat_length + self.own_feat_length
+            
+            obs_own = obs[..., self.ally_feat_length + self.enemy_feat_length:].unsqueeze(-2)
+            obs_own_embedding = self.own_feat_token_embedding(obs_own)
+            obs_enemy = obs[..., self.ally_feat_length: self.ally_feat_length + self.enemy_feat_length].reshape(*obs.shape[:-1], -1, self.enemy_feat)
+            obs_enemy_embedding = self.enemy_feat_token_embedding(obs_enemy)
+            obs_ally = obs[..., :self.ally_feat_length].reshape(*obs.shape[:-1], -1, self.ally_feat)
+            obs_ally_embedding = self.ally_feat_token_embedding(obs_ally)
+            obs_embedding = torch.cat([obs_own_embedding, obs_enemy_embedding, obs_ally_embedding], dim=-2)
+            
+            actor_features = self.transformer.forward_embedding(obs_embedding, rnn_states, None)
 
         if self.args["static_env_net"]:
             # assert self.env_prior is not None
@@ -162,36 +186,33 @@ class PPOActor(nn.Module):
                     env_prior = llm_env_prior
                 else:
                     env_prior = torch.concatenate([env_prior, llm_env_prior], dim=-1)
-            # print(env_prior)
-            env_features = self.static_env_net(env_prior)
-            # # env_tensor = torch.zeros()
-            # # env_features = self.static_env_net(env_tensor)
-            # map_name = self.args["map_name"]
-            # # 10 * 30
-            # env_ori_tensor = torch.zeros(actor_features.shape[0], 30)
-            # if map_name == "4m_vs_3m":
-            #     indices = [0, 10, 20]
-            #     values = [1, 3, 4]
-            #     env_ori_tensor[:, indices] = torch.tensor(values, dtype=torch.float).view(1, -1)
-            # elif map_name == "9m_vs_8m":
-            #     indices = [0, 10, 20]
-            #     values = [1, 9, 8]
-            #     env_ori_tensor[:, indices] = torch.tensor(values, dtype=torch.float).view(1, -1)
-            # elif map_name == "6m":
-            #     indices = [0, 10, 20]
-            #     values = [1, 6, 6]
-            #     env_ori_tensor[:, indices] = torch.tensor(values, dtype=torch.float).view(1, -1)
-            # env_tensor = check(env_ori_tensor).to(**self.tpdv)
-            # # 10 * 128
-            # env_features = self.static_env_net(env_tensor)
-            total_features = torch.concatenate([actor_features, env_features], dim=-1)
             
-            # todo: total_features = torch.concatenate([actor_features, env_features, llm_features], dim=-1)
+            env_features = self.static_env_net(env_prior)
+            # TODO: env belief posterior for UPDeT
+            assert not self.actor_use_updet
+            total_features = actor_features + env_features
         else:
             total_features = actor_features
 
-        # action_alignment restore
-        action_dist = self.act(total_features, available_actions)
-        if self.action_space_align:
-            action_dist = FixedCategorical(logits=action_dist.logits[:, :get_onehot_shape_from_act_space(self.action_space)])
+        if not self.actor_use_updet:
+            action_dist = self.act(total_features, available_actions)
+        else:
+            basic_actions = self.act(total_features[..., 0, :])
+
+            # last dim for hidden state
+            rnn_states = total_features[:, -1:, :]
+
+            # each enemy has an output Q
+            enemies_actions = []
+            for i in range(self.args['n_enemies']):
+                enemy_action = self.act(total_features[:, 1 + i, :])
+                enemy_action = torch.mean(enemy_action, dim=-1)
+                enemies_actions.append(enemy_action)
+            enemies_actions = torch.stack(enemies_actions, dim=-1)
+
+            logits = torch.cat((basic_actions, enemies_actions), dim=-1)
+            if available_actions is not None:
+                logits[available_actions == 0] = -1e10
+            action_dist = FixedCategorical(logits=logits)
+        
         return action_dist, rnn_states

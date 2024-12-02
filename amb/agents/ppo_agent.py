@@ -46,37 +46,6 @@ class PPOAgent(BaseAgent):
     
     def restore(self, path):
         state_dict = torch.load(os.path.join(path, "actor.pth"))
-        keys = list(state_dict.keys())
-
-        if self.agent_type == "adv_traitor":
-            self.actor.load_state_dict(state_dict)
-            return
-
-        ally_num = self.ally_num # TODO
-        ori_size = state_dict[keys[0]].shape[0]
-        target_size = self.obs_space[0]
-        ally_feat_size = target_size - ori_size - 1 
-        offset = ally_feat_size * ally_num if self.agent_type == "adv_victim" else 0
-        add_zero_num = 1 if self.agent_type == "adv_victim" else 0
-        if target_size > ori_size:
-            # 改掉[0, 1, 2]三维
-            state_dict[keys[0]] = \
-                torch.concatenate([state_dict[keys[0]][:offset], \
-                    torch.zeros(ally_feat_size, device="cuda"), \
-                    state_dict[keys[0]][offset:], \
-                    torch.zeros(add_zero_num, device="cuda")], dim=0)
-            state_dict[keys[1]] = \
-                torch.concatenate([state_dict[keys[1]][:offset], \
-                    torch.zeros(ally_feat_size, device="cuda"), \
-                    state_dict[keys[1]][offset:], \
-                    torch.zeros(add_zero_num, device="cuda")], dim=0)
-            state_dict[keys[2]] = \
-                torch.concatenate([state_dict[keys[2]][:, :offset], \
-                    torch.zeros(self.args["hidden_sizes"][0], ally_feat_size, device="cuda"), \
-                    state_dict[keys[2]][:, offset:], \
-                    torch.zeros(self.args["hidden_sizes"][0], add_zero_num, device="cuda")], dim=-1)
-        elif target_size < ori_size:
-            raise Exception("PPOAgent restore function is transferring from large to small.")
         self.actor.load_state_dict(state_dict)
 
     def save(self, path):

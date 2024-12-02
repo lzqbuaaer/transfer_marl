@@ -399,4 +399,5 @@ class MAPPO:
                 self.agents[agent_id].restore(os.path.join(path, str(agent_id)))
         # 0328: critic在这里实现
         # 0329: critic不用实现
-        self.critic.load_state_dict(torch.load(os.path.join(path, "critic.pth")))
+        if self.args.get('load_critic', True):
+            self.critic.load_state_dict(torch.load(os.path.join(path, "critic.pth")))

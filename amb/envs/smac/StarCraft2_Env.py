@@ -80,12 +80,12 @@ class StarCraft2Env(MultiAgentEnv):
         continuing_episode=False,
         obs_all_health=True,
         obs_own_health=True,
-        obs_last_action=True,
+        obs_last_action=False,
         obs_pathing_grid=False,
         obs_terrain_height=False,
         obs_instead_of_state=False,
         obs_timestep_number=False,
-        obs_agent_id=True,
+        obs_agent_id=False,
         state_pathing_grid=False,
         state_terrain_height=False,
         state_last_action=True,
@@ -1927,7 +1927,7 @@ class StarCraft2Env(MultiAgentEnv):
         if self.obs_all_health:
             nf_al += 1 + self.shield_bits_ally
 
-        if self.obs_last_action:
+        if self.state_last_action:
             nf_al += self.n_actions
 
         if self.add_center_xy:
@@ -1952,7 +1952,7 @@ class StarCraft2Env(MultiAgentEnv):
         if self.obs_own_health:
             own_feats += 1 + self.shield_bits_ally
 
-        if self.obs_last_action:
+        if self.state_last_action:
             own_feats += self.n_actions
 
         if self.add_center_xy:
