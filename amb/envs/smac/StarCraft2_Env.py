@@ -396,9 +396,10 @@ class StarCraft2Env(MultiAgentEnv):
             server_ports = sc_pb.PortSet(game_port=self.ports[0], base_port=self.ports[1])
             client_ports = sc_pb.PortSet(game_port=self.ports[2], base_port=self.ports[3])
             if self.host:
+                import os
                 create = sc_pb.RequestCreateGame(
                     local_map=sc_pb.LocalMap(
-                        map_path=_map.path, map_data=self._run_config.map_data(_map.path)
+                        map_path=os.environ['SC2PATH'] + '/Maps/' + _map.path, map_data=None
                     ),
                     realtime=False,
                     random_seed=self._seed,

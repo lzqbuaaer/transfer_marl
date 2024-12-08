@@ -165,7 +165,26 @@ class PPOActor(nn.Module):
             obs_ally_embedding = self.ally_feat_token_embedding(obs_ally)
             obs_embedding = torch.cat([obs_own_embedding, obs_enemy_embedding, obs_ally_embedding], dim=-2)
             
-            actor_features = self.transformer.forward_embedding(obs_embedding, rnn_states, None)
+            if self.use_recurrent_policy:
+                if obs_embedding.shape[0] == rnn_states.shape[0]:
+                    rnn_states = rnn_states * masks.squeeze(-1).view(-1, 1, 1).repeat(1, self.recurrent_n, rnn_states.shape[-1])
+                    output = self.transformer.forward_embedding(obs_embedding, rnn_states, None)
+                    actor_features = output[:, :-self.recurrent_n, :]
+                    rnn_states = output[:, -self.recurrent_n:, :]
+                else:
+                    T = int(obs_embedding.shape[0] / rnn_states.shape[0])
+                    obs_embedding = obs_embedding.view(T, rnn_states.shape[0], *obs_embedding.shape[1:])
+                    masks = masks.view(T, rnn_states.shape[0])
+                    actor_features = []
+                    for t in range(T):
+                        rnn_states = rnn_states * masks[t].view(-1, 1, 1).repeat(1, self.recurrent_n, rnn_states.shape[-1])
+                        actor_feature = self.transformer.forward_embedding(obs_embedding[t], rnn_states, None)
+                        actor_features.append(actor_feature[:, :-self.recurrent_n, :])
+                        rnn_states = actor_feature[:, -self.recurrent_n:, :]
+                    actor_features = torch.cat(actor_features, dim=0)
+                    
+            else:
+                actor_features = self.transformer.forward_embedding(obs_embedding, None, None)
 
         if self.args["static_env_net"]:
             # assert self.env_prior is not None
@@ -198,9 +217,6 @@ class PPOActor(nn.Module):
             action_dist = self.act(total_features, available_actions)
         else:
             basic_actions = self.act(total_features[..., 0, :])
-
-            # last dim for hidden state
-            rnn_states = total_features[:, -1:, :]
 
             # each enemy has an output Q
             enemies_actions = []
