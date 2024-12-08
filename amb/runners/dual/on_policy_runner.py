@@ -111,8 +111,9 @@ class OnPolicyRunner(BaseRunner):
                 assert self.num_angels == rewards[0].shape[1]
                 assert self.num_demons == rewards[1].shape[1]
                 assert rewards[0].shape[0] == rewards[1].shape[0]
-                for process_id in range(rewards[0].shape[0]):
-                    rewards[0][process_id, :, :] = -np.mean(rewards[1][process_id])
+                if self.reverse_team:
+                    for process_id in range(rewards[0].shape[0]):
+                        rewards[0][process_id, :, :] = -np.mean(rewards[1][process_id])
                 
                 filled = np.ones((self.n_rollout_threads, self.num_angels), dtype=np.float32)
 

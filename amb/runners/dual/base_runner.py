@@ -28,6 +28,8 @@ class BaseRunner:
         self.algo_args = algo_args
         self.env_args = env_args
 
+        self.reverse_team = self.env_args['reverse_team']
+        
         self.angel_rnn_hidden_size = algo_args["angel"]["hidden_sizes"][-1]
         self.angel_recurrent_n = algo_args["angel"]["recurrent_n"]
         self.demon_rnn_hidden_size = algo_args["demon"]["hidden_sizes"][-1]
@@ -191,8 +193,9 @@ class BaseRunner:
             assert self.num_angels == eval_rewards[0].shape[1]
             assert self.num_demons == eval_rewards[1].shape[1]
             assert eval_rewards[0].shape[0] == eval_rewards[1].shape[0]
-            for process_id in range(eval_rewards[0].shape[0]):
-                eval_rewards[0][process_id, :, :] = np.mean(eval_rewards[1][process_id])
+            if self.reverse_team:
+                for process_id in range(eval_rewards[0].shape[0]):
+                    eval_rewards[0][process_id, :, :] = np.mean(eval_rewards[1][process_id])
 
             eval_data = (eval_obs[0], eval_share_obs[0], eval_rewards[0], eval_dones[0], eval_infos[0], eval_available_actions[0])
             self.logger.eval_per_step(eval_data)  # logger callback at each step of evaluation
