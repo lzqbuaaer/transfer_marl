@@ -419,7 +419,6 @@ class StarCraft2Env(MultiAgentEnv):
                     server_ports=server_ports, client_ports=[client_ports]
                 )
                 self._controller.join_game(join)
-                assert False
 
         game_info = self._controller.game_info()
         map_info = game_info.start_raw
