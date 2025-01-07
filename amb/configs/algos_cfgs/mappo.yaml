@@ -125,6 +125,7 @@ log_dir: "./results"
 # multi-task transfer
 load_critic: True
 env_belief: False
+env_belief_matter: False
 env_prior_path: "./env_prior.npy"
 belief_epoch: 5
 belief_num_mini_batch: 1

@@ -43,6 +43,7 @@ class MAPPO:
         self.weight_decay = args["weight_decay"]
         
         self.env_belief = args.get("env_belief", False)
+        self.env_belief_matter = args.get("env_belief_matter", False)
         if self.env_belief:
             env_prior_path = args.get("env_prior_path", "./env_prior.npy")
             self.env_prior = torch.tensor(np.load(env_prior_path)).to(device)
@@ -155,6 +156,8 @@ class MAPPO:
             available_actions = sample["available_actions"]
         if self.env_belief:
             belief = sample["belief"]
+            if self.env_belief_matter:
+                belief[..., :] = self.env_prior.cpu().numpy()
         else:
             belief = None
 

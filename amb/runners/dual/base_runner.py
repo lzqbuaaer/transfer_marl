@@ -43,6 +43,7 @@ class BaseRunner:
         self.n_eval_rollout_threads = algo_args["angel"]['n_eval_rollout_threads']
         
         self.env_belief = algo_args["angel"].get("env_belief", False)
+        self.env_belief_matter = algo_args["angel"].get("env_belief_matter", False)
         if self.env_belief:
             env_prior_path = algo_args["angel"].get("env_prior_path", "./env_prior.npy")
             if os.path.exists(env_prior_path):
@@ -114,6 +115,12 @@ class BaseRunner:
             self.logger = LOGGER_REGISTRY[args["env"]](
                 args, algo_args, env_args, self.num_angels, self.num_demons, self.writter, self.run_dir
             )
+            
+        if self.env_belief and self.env_belief_matter:
+            self.eval_angel_env_belief_ground_truth = np.zeros((self.n_eval_rollout_threads, self.num_angels, self.env_belief_dim), dtype=np.float32)
+            self.eval_angel_env_belief_ground_truth[:] = self.env_prior
+            self.angel_env_belief_ground_truth = np.zeros((self.n_rollout_threads, self.num_angels, self.env_belief_dim), dtype=np.float32)
+            self.angel_env_belief_ground_truth[:] = self.env_prior
 
         # algorithm
         self.algo = ALGO_REGISTRY[args["angel"]](
@@ -183,7 +190,7 @@ class BaseRunner:
         while True:
             eval_angel_actions_collector = []
             for agent_id in range(self.num_angels):
-                if self.env_belief:
+                if self.env_belief and not self.env_belief_matter:
                     env_belief, rnn_state_belief = self.angels[agent_id].forward_belief(
                         eval_obs[0][:, agent_id],
                         last_reward[:, agent_id],
@@ -200,7 +207,8 @@ class BaseRunner:
                     eval_angel_masks[:, agent_id],
                     eval_available_actions[0][:, agent_id]
                     if eval_available_actions[0][0] is not None else None,
-                    env_belief = eval_angel_env_belief[:, agent_id] if eval_angel_env_belief is not None else None,
+                    env_belief = (self.eval_angel_env_belief_ground_truth[:, agent_id] if self.env_belief_matter 
+                                  else eval_angel_env_belief[:, agent_id]) if self.env_belief else None,
                     deterministic=True,
                 )
                 eval_angel_rnn_states[:, agent_id] = _t2n(temp_rnn_state)

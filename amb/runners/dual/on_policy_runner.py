@@ -212,7 +212,7 @@ class OnPolicyRunner(BaseRunner):
                 self.buffers[agent_id].data["masks"][:, step],
                 self.buffers[agent_id].data["available_actions"][:, step]
                 if "available_actions" in self.buffers[agent_id].data else None,
-                env_belief = belief_np
+                env_belief = self.angel_env_belief_ground_truth[:, agent_id] if (self.env_belief and self.env_belief_matter) else belief_np
             )
             value, rnn_state_critic = self.critic(
                 self.buffers[agent_id].data["share_obs"][:, step],
