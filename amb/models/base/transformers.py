@@ -148,19 +148,16 @@ class Encoder(nn.Module):
 
     def __init__(self, emb, heads, depth):
         super().__init__()
-
-        eblocks = []
-        for i in range(depth):
-            eblocks.append(
-                EncoderBlock(emb=emb, heads=heads))
-
-        self.eblocks = nn.Sequential(*eblocks)
+        self.eblocks = nn.ModuleList([EncoderBlock(emb=emb, heads=heads) for _ in range(depth)])
 
     def forward(self, tokens, h=None, mask=None):
         if h is not None:
-            tokens = torch.cat((tokens, h), 1)
+            x = torch.cat((tokens, h), 1)
+        else:
+            x = tokens
 
-        x = self.eblocks((tokens, mask))
+        for eblock in self.eblocks:
+            x = eblock((x, mask))
 
         return x
     
@@ -171,22 +168,20 @@ class Decoder(nn.Module):
 
         self.num_tokens = output_dim
 
-        dblocks = []
-        for i in range(depth):
-            dblocks.append(
-                EncoderBlock(emb=emb, heads=heads))
-
-        self.dblocks = nn.Sequential(*dblocks)
+        self.dblocks = nn.ModuleList([DecoderBlock(emb=emb, heads=heads) for _ in range(depth)])
 
         self.toprobs = nn.Linear(emb, output_dim)
     
     def forward(self, tokens, memory, h=None, mask=None, memory_mask=None):
         if h is not None:
-            tokens = torch.cat((tokens, h), 1)
+            x = torch.cat((tokens, h), 1)
+        else:
+            x = tokens
 
         b, t, e = tokens.size()
-
-        x, mask = self.dblocks((tokens, mask), (memory, memory_mask))
+        
+        for dblock in self.dblocks:
+            x = dblock((x, mask), (memory, memory_mask))
 
         x = self.toprobs(x.view(b * t, e)).view(b, t, self.num_tokens)
 
@@ -204,9 +199,9 @@ class Transformer(nn.Module):
         memory = self.encoder(src, h=src_h, mask=src_mask)
         output = self.decoder(tgt, memory, h=tgt_h, mask=tgt_mask, memory_mask=src_mask)
 
-        return output[:, :-tgt_h.shape[1]] if tgt_h else None, \
-               memory[:, -src_h.shape[1]:] if src_h else None, \
-               output[:, -tgt_h.shape[1]:] if tgt_h else None
+        return output[:, :-tgt_h.shape[1]] if (tgt_h is not None) else output, \
+               memory[:, -src_h.shape[1]:] if (src_h is not None) else None, \
+               output[:, -tgt_h.shape[1]:] if (tgt_h is not None) else None
 
 def mask_(matrices, maskval=0.0, mask_diagonal=True):
 

@@ -62,7 +62,7 @@ class TransformerBelief(nn.Module):
         last_obs_enemy_embedding = self.enemy_feat_token_embedding(last_obs_enemy)
         last_obs_ally = last_obs[..., :self.ally_feat_length].reshape(*last_obs.shape[:-1], -1, self.ally_feat)
         last_obs_ally_embedding = self.ally_feat_token_embedding(last_obs_ally)
-        last_obs_embedding = torch.cat([last_obs_own_embedding, last_obs_enemy_embedding, last_obs_ally_embedding])
+        last_obs_embedding = torch.cat([last_obs_own_embedding, last_obs_enemy_embedding, last_obs_ally_embedding], dim=-2)
         
         if last_obs_embedding.shape[0] == rnn_states.shape[0]:
             rnn_states = rnn_states * masks.squeeze(-1).view(-1, 1, 1).repeat(1, self.recurrent_n, rnn_states.shape[-1])

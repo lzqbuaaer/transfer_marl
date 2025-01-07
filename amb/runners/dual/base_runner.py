@@ -242,9 +242,10 @@ class BaseRunner:
 
             eval_angel_rnn_states[eval_dones_env == True] = 0
             eval_demon_rnn_states[eval_dones_env == True] = 0
-            eval_angel_rnn_states_belief[eval_dones_env == True] = 0
-            eval_bayesian_update[eval_dones_env == True] = False
-            eval_angel_env_belief[eval_dones_env == True, :] = self.env_prior
+            if self.env_belief:
+                eval_angel_rnn_states_belief[eval_dones_env == True] = 0
+                eval_bayesian_update[eval_dones_env == True] = False
+                eval_angel_env_belief[eval_dones_env == True, :] = self.env_prior
 
             eval_angel_masks = np.ones((self.n_eval_rollout_threads, self.num_angels, 1), dtype=np.float32)
             eval_demon_masks = np.ones((self.n_eval_rollout_threads, self.num_demons, 1), dtype=np.float32)

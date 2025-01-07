@@ -41,7 +41,7 @@ class OnPolicyRunner(BaseRunner):
                 if self.env_belief:
                     self.env_belief_dim = self.algo_args["angel"]["env_belief_dim"]
                     scheme["rnn_states_belief"] = {"vshape": (self.angel_recurrent_n, self.angel_rnn_hidden_size), "offset": 1, "extra": ["rnn_state", "sample_next"]}
-                    scheme["belief"] = {"vshape": (self.env_belief_dim), "offset": 0}
+                    scheme["belief"] = {"vshape": (self.env_belief_dim,), "offset": 0}
                     scheme["obs"]["extra"] = ["sample_next"]
                     scheme["masks"]["extra"] = ["sample_next"]
                 if self.action_type == "Discrete":
@@ -98,7 +98,7 @@ class OnPolicyRunner(BaseRunner):
             for step in range(self.algo_args["angel"]['episode_length']):
                 # Sample actions from actors and values from critics
                 if self.env_belief:
-                    values, angel_actions, action_log_probs, angel_rnn_states, rnn_states_critic = self.collect(step)
+                    values, angel_actions, action_log_probs, angel_rnn_states, rnn_states_critic, beliefs, rnn_states_belief = self.collect(step)
                 else:
                     values, angel_actions, action_log_probs, angel_rnn_states, rnn_states_critic = self.collect(step)
                     
@@ -140,6 +140,8 @@ class OnPolicyRunner(BaseRunner):
                     "infos": infos[0], "value_preds": values, "actions": angel_actions, "action_log_probs": action_log_probs,
                     "rnn_states_actor": angel_rnn_states, "rnn_states_critic": rnn_states_critic, "filled": filled
                 }
+                if self.env_belief:
+                    data.update({"belief": beliefs, "rnn_states_belief": rnn_states_belief})
                 if "available_actions" in self.buffers[0].data:
                     data.update({"available_actions": available_actions[0]})
                 
@@ -320,7 +322,7 @@ class OnPolicyRunner(BaseRunner):
         # update critic
         critic_train_info = self.algo.train_critic(self.buffers, self.value_normalizer)
 
-        return actor_train_infos, critic_train_info, belief_train_infos
+        return actor_train_infos, critic_train_info
 
     def save(self):
         """Save model parameters."""

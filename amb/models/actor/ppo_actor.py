@@ -163,7 +163,7 @@ class PPOActor(nn.Module):
             
         if self.env_belief:
             env_features = self.static_env_net(env_belief)
-            total_features = actor_features + env_features
+            total_features = actor_features + env_features.unsqueeze(-2)
         else:
             total_features = actor_features
 

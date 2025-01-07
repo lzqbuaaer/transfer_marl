@@ -270,8 +270,9 @@ class MAPPO:
         belief = sample["belief"]
         next_rnn_states_belief = sample["next_rnn_states_belief"]
         next_masks = sample["next_masks"]
+        next_masks = check(next_masks).to(**self.tpdv)
         
-        belief, _ = self.agents[agent_id].forward_belief(next_obs, rewards, obs, belief, next_rnn_states_belief)
+        belief, _ = self.agents[agent_id].forward_belief(next_obs, rewards, obs, belief, next_rnn_states_belief, next_masks)
         difference = ((belief - self.env_prior) ** 2 * next_masks).sum()
 
         self.belief_optimizers[agent_id].zero_grad()
