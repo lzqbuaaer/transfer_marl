@@ -41,67 +41,49 @@ class MAPPO:
         self.critic_lr = args["critic_lr"]
         self.opti_eps = args["opti_eps"]
         self.weight_decay = args["weight_decay"]
+        
+        self.env_belief = args.get("env_belief", False)
+        if self.env_belief:
+            env_prior_path = args.get("env_prior_path", "./env_prior.npy")
+            self.env_prior = torch.tensor(np.load(env_prior_path)).to(device)
+            self.belief_epoch = args["belief_epoch"]
+            self.belief_num_mini_batch = args["belief_num_mini_batch"]
 
         self.obs_spaces = obs_spaces
         self.share_obs_space = share_obs_space
         self.act_spaces = act_spaces
         self.action_type = self.act_spaces[0].__class__.__name__
         
-        # prior information of the environment
-        self.llm_env_prior = None
-        self.llm_env_prior_length = 0
-        self.use_manual_env_prior = args.get("use_manual_env_prior", False)
-        self.use_llm_env_prior = args.get("use_llm_env_prior", False)
-        self.llm_env_prior_path = args.get("llm_env_prior_path", "./env_prior.npy")
-        if os.path.exists(self.llm_env_prior_path) and self.use_llm_env_prior:
-            self.llm_env_prior = check(np.load(self.llm_env_prior_path)).to(**self.tpdv)
-            self.llm_env_prior_length = len(self.llm_env_prior)
-        else:
-            self.use_llm_env_prior = False
-        
-        self.env_prior = None
-        self.manual_env_prior = None
-        self.manual_env_prior_length = 0
-        self.env_prior_length = 0
-        if self.use_manual_env_prior and "manual_env_prior" in args:
-            manual_env_prior = np.array(args["manual_env_prior"])
-            self.manual_env_prior = check(manual_env_prior).to(**self.tpdv)
-            self.manual_env_prior_length = len(self.manual_env_prior)
-            # if self.use_llm_env_prior:
-            #     self.env_prior = torch.cat([manual_env_prior, self.llm_env_prior])
-            # else:
-            #     self.env_prior = manual_env_prior
-
-        else:
-            self.use_manual_env_prior = False
-            # if self.use_llm_env_prior:
-            #     self.env_prior = self.llm_env_prior
-        # if self.env_prior is not None:
-        #     self.env_prior_length = len(self.env_prior)
-
-        self.args["env_prior_length"] = self.llm_env_prior_length + self.manual_env_prior_length
-        self.args["llm_env_prior_length"] = self.llm_env_prior_length
-        self.args["manual_env_prior_length"] = self.manual_env_prior_length
-        
         self.agents = []
         self.actors = []
         self.actor_optimizers = []
+        if self.env_belief: 
+            self.belief_optimizers = []
 
         if self.share_param:
-            agent = PPOAgent(args, obs_spaces[0], act_spaces[0], device=device, ally_num=ally_num, agent_type=agent_type, llm_env_prior=self.llm_env_prior, manual_env_prior=self.manual_env_prior)
+            agent = PPOAgent(args, obs_spaces[0], act_spaces[0], device=device, ally_num=ally_num, agent_type=agent_type)
             optimizer = torch.optim.Adam(
                 agent.actor.parameters(),
                 lr=self.lr,
                 eps=self.opti_eps,
                 weight_decay=self.weight_decay,
             )
+            if self.env_belief:
+                belief_optimizer = torch.optim.Adam(
+                    agent.belief.parameters(),
+                    lr=self.lr,
+                    eps=self.opti_eps,
+                    weight_decay=self.weight_decay
+                )
             for agent_id in range(self.num_agents):
                 self.agents.append(agent)
                 self.actors.append(agent.actor)
                 self.actor_optimizers.append(optimizer)
+                if self.env_belief:    
+                    self.belief_optimizers.append(belief_optimizer)
         else:
             for agent_id in range(self.num_agents):
-                agent = PPOAgent(args, obs_spaces[agent_id], act_spaces[agent_id], device=device, ally_num=ally_num, agent_type=agent_type, env_prior=self.env_prior)
+                agent = PPOAgent(args, obs_spaces[agent_id], act_spaces[agent_id], device=device, ally_num=ally_num, agent_type=agent_type)
                 optimizer = torch.optim.Adam(
                     agent.actor.parameters(),
                     lr=self.lr,
@@ -111,8 +93,16 @@ class MAPPO:
                 self.agents.append(agent)
                 self.actors.append(agent.actor)
                 self.actor_optimizers.append(optimizer)
+                if self.env_belief:
+                    belief_optimizer = torch.optim.Adam(
+                        agent.belief.parameters(),
+                        lr=self.lr,
+                        eps=self.opti_eps,
+                        weight_decay=self.weight_decay
+                    )
+                    self.belief_optimizers.append(belief_optimizer)
 
-        self.critic = VCritic(args, self.share_obs_space, device=self.device, llm_env_prior=self.llm_env_prior, manual_env_prior=self.manual_env_prior)
+        self.critic = VCritic(args, self.share_obs_space, device=self.device)
         self.critic_optimizer = torch.optim.Adam(
             self.critic.parameters(),
             lr=self.critic_lr,
@@ -131,12 +121,12 @@ class MAPPO:
             for agent_id in range(self.num_agents):
                 update_linear_schedule(self.actor_optimizers[agent_id], episode, episodes, self.lr)
 
-    def evaluate_actions(self, agent_id, obs, rnn_states, action, masks, available_actions=None, active_masks=None):
+    def evaluate_actions(self, agent_id, obs, rnn_states, action, masks, available_actions=None, active_masks=None, env_belief=None):
         action = check(action).to(**self.tpdv)
         if active_masks is not None:
             active_masks = check(active_masks).to(**self.tpdv)
 
-        action_dist, _ = self.actors[agent_id](obs, rnn_states, masks, available_actions)
+        action_dist, _ = self.actors[agent_id](obs, rnn_states, masks, available_actions, env_belief=env_belief)
         action_log_probs = action_dist.log_probs(action)
         if active_masks is not None:
             if self.action_type == "Discrete":
@@ -163,6 +153,10 @@ class MAPPO:
         available_actions = None
         if "available_actions" in sample:
             available_actions = sample["available_actions"]
+        if self.env_belief:
+            belief = sample["belief"]
+        else:
+            belief = None
 
         old_action_log_probs = check(old_action_log_probs).to(**self.tpdv)
         target_advantage = check(target_advantage).to(**self.tpdv)
@@ -170,7 +164,7 @@ class MAPPO:
 
         # reshape to do in a single forward pass for all steps
         action_log_probs, dist_entropy = self.evaluate_actions(
-            agent_id, obs, rnn_states_actor, actions, masks, available_actions, active_masks)
+            agent_id, obs, rnn_states_actor, actions, masks, available_actions, active_masks, env_belief=belief)
         # update actor
         imp_weights = getattr(torch, self.action_aggregation)(
             torch.exp(action_log_probs - old_action_log_probs), dim=-1, keepdim=True)
@@ -267,6 +261,55 @@ class MAPPO:
         self.critic_optimizer.step()
 
         return value_loss, critic_grad_norm
+    
+    def update_belief(self, sample, agent_id):
+        assert self.env_belief
+        next_obs = sample["next_obs"]
+        rewards = sample["rewards"]
+        obs = sample["obs"]
+        belief = sample["belief"]
+        next_rnn_states_belief = sample["next_rnn_states_belief"]
+        next_masks = sample["next_masks"]
+        
+        belief, _ = self.agents[agent_id].forward_belief(next_obs, rewards, obs, belief, next_rnn_states_belief)
+        difference = ((belief - self.env_prior) ** 2 * next_masks).sum()
+
+        self.belief_optimizers[agent_id].zero_grad()
+
+        difference.backward()
+
+        if self.use_max_grad_norm:
+            belief_grad_norm = nn.utils.clip_grad_norm_(self.agents[agent_id].belief.parameters(), self.max_grad_norm)
+        else:
+            belief_grad_norm = get_grad_norm(self.agents[agent_id].belief.parameters())
+
+        self.belief_optimizers[agent_id].step()
+
+        return difference, belief_grad_norm
+    
+    def train_belief(self, buffer, agent_id):
+        train_info = {}
+        train_info["belief_difference_loss"] = 0
+        train_info["belief_grad_norm"] = 0
+
+        for _ in range(self.belief_epoch):
+            if self.use_recurrent_policy:
+                data_generator = buffer.chunk_generator(self.belief_num_mini_batch, self.data_chunk_length)
+            else:
+                data_generator = buffer.step_generator(self.belief_num_mini_batch)
+
+            for sample in data_generator:
+                difference, belief_grad_norm = self.update_belief(sample, agent_id)
+
+                train_info["belief_difference_loss"] += difference.item()
+                train_info["belief_grad_norm"] += belief_grad_norm
+
+        num_updates = self.belief_epoch * self.belief_num_mini_batch
+
+        for k in train_info.keys():
+            train_info[k] /= num_updates
+
+        return train_info
 
     def train_critic(self, buffers, value_normalizer=None):
         train_info = {}
@@ -355,6 +398,33 @@ class MAPPO:
 
         return train_info
     
+    def share_param_train_belief(self, buffers):
+        train_info = {}
+        train_info["belief_difference_loss"] = 0
+        train_info["belief_grad_norm"] = 0
+
+        for _ in range(self.belief_epoch):
+            data_generators = []
+            for agent_id in range(self.num_agents):
+                if self.use_recurrent_policy:
+                    data_generator = buffers[agent_id].chunk_generator(self.belief_num_mini_batch, self.data_chunk_length)
+                else:
+                    data_generator = buffers[agent_id].step_generator(self.belief_num_mini_batch)
+                data_generators.append(data_generator)
+
+            for batches in self.share_generator(data_generators):
+                difference, belief_grad_norm = self.update_belief(batches, 0)
+
+                train_info["belief_difference_loss"] += difference.item()
+                train_info["belief_grad_norm"] += belief_grad_norm
+
+        num_updates = self.belief_epoch * self.belief_num_mini_batch
+
+        for k in train_info.keys():
+            train_info[k] /= num_updates
+
+        return train_info
+    
     def share_generator(self, data_generators):
         """if actor and critic use the same buffer, when actors have heterogeneous input, there will be exceptions in train_critic()."""
         for _ in range(self.actor_num_mini_batch):
@@ -373,13 +443,17 @@ class MAPPO:
             yield batches
 
     def prep_training(self):
-        for actor in self.actors:
+        for i, actor in enumerate(self.actors):
             actor.train()
+            if self.env_belief:
+                self.agents[i].belief.train()
         self.critic.train()
 
     def prep_rollout(self):
-        for actor in self.actors:
+        for i, actor in enumerate(self.actors):
             actor.eval()
+            if self.env_belief:
+                self.agents[i].belief.eval()
         self.critic.eval()
 
     def save(self, path):

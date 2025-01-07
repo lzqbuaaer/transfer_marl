@@ -124,12 +124,10 @@ log_dir: "./results"
 
 # multi-task transfer
 load_critic: True
-static_env_net: False
-use_manual_env_prior: False
-manual_embedding_length: 10
-use_llm_env_prior: False
-llm_env_prior_path: "./env_prior.npy"
-obs_feat_layer_grad_on: False
+env_belief: False
+env_prior_path: "./env_prior.npy"
+belief_epoch: 5
+belief_num_mini_batch: 1
 
 actor_use_updet: False
 obs_transformer_heads: 3

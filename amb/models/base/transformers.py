@@ -3,14 +3,13 @@ import torch.nn.functional as F
 import torch
 import argparse
 
-class SelfAttention(nn.Module):
-    def __init__(self, emb, heads=8, mask=False):
+class Attention(nn.Module):
+    def __init__(self, emb, heads=8):
 
         super().__init__()
 
         self.emb = emb
         self.heads = heads
-        self.mask = mask
 
         self.tokeys = nn.Linear(emb, emb * heads, bias=False)
         self.toqueries = nn.Linear(emb, emb * heads, bias=False)
@@ -18,33 +17,35 @@ class SelfAttention(nn.Module):
 
         self.unifyheads = nn.Linear(heads * emb, emb)
 
-    def forward(self, x, mask):
+    def forward(self, q, k, v, mask):
 
-        b, t, e = x.size()
+        b_q, t_q, e_q = q.size()
+        b_k, t_k, e_k = k.size()
+        b_v, t_v, e_v = v.size()
+        assert (b_q == b_k) and (b_k == b_v)
+        assert (t_k == t_v)
+        assert (self.emb == e_q) and (self.emb == e_k) and (self.emb == e_v)
         h = self.heads
-        keys = self.tokeys(x).view(b, t, h, e)
-        queries = self.toqueries(x).view(b, t, h, e)
-        values = self.tovalues(x).view(b, t, h, e)
+        keys = self.tokeys(k).view(b_k, t_k, h, e_k)
+        queries = self.toqueries(q).view(b_q, t_q, h, e_q)
+        values = self.tovalues(v).view(b_v, t_v, h, e_v)
 
         # compute scaled dot-product self-attention
 
         # - fold heads into the batch dimension
-        keys = keys.transpose(1, 2).contiguous().view(b * h, t, e)
-        queries = queries.transpose(1, 2).contiguous().view(b * h, t, e)
-        values = values.transpose(1, 2).contiguous().view(b * h, t, e)
+        keys = keys.transpose(1, 2).contiguous().view(b_k * h, t_k, e_k)
+        queries = queries.transpose(1, 2).contiguous().view(b_q * h, t_q, e_q)
+        values = values.transpose(1, 2).contiguous().view(b_v * h, t_v, e_v)
 
-        queries = queries / (e ** (1 / 4))
-        keys = keys / (e ** (1 / 4))
+        queries = queries / (e_q ** (1 / 4))
+        keys = keys / (e_k ** (1 / 4))
         # - Instead of dividing the dot products by sqrt(e), we scale the keys and values.
         #   This should be more memory efficient
 
         # - get dot product of queries and keys, and scale
         dot = torch.bmm(queries, keys.transpose(1, 2))
 
-        assert dot.size() == (b * h, t, t)
-
-        if self.mask:  # mask out the upper half of the dot matrix, excluding the diagonal
-            mask_(dot, maskval=float('-inf'), mask_diagonal=False)
+        assert dot.size() == (b_q * h, t_q, t_v)
 
         if mask is not None:
             dot = dot.masked_fill(mask == 0, -1e9)
@@ -53,20 +54,19 @@ class SelfAttention(nn.Module):
         # - dot now has row-wise self-attention probabilities
 
         # apply the self attention to the values
-        out = torch.bmm(dot, values).view(b, h, t, e)
+        out = torch.bmm(dot, values).view(b_q, h, t_q, e_v)
 
         # swap h, t back, unify heads
-        out = out.transpose(1, 2).contiguous().view(b, t, h * e)
+        out = out.transpose(1, 2).contiguous().view(b_q, t_q, h * e_v)
 
         return self.unifyheads(out)
 
-class TransformerBlock(nn.Module):
+class EncoderBlock(nn.Module):
 
-    def __init__(self, emb, heads, mask, ff_hidden_mult=4, dropout=0.0):
+    def __init__(self, emb, heads, ff_hidden_mult=4, dropout=0.0):
         super().__init__()
 
-        self.attention = SelfAttention(emb, heads=heads, mask=mask)
-        self.mask = mask
+        self.attention = Attention(emb, heads=heads)
 
         self.norm1 = nn.LayerNorm(emb)
         self.norm2 = nn.LayerNorm(emb)
@@ -77,69 +77,136 @@ class TransformerBlock(nn.Module):
             nn.Linear(ff_hidden_mult * emb, emb)
         )
 
-        self.do = nn.Dropout(dropout)
+        self.do1 = nn.Dropout(dropout)
+        self.do2 = nn.Dropout(dropout)
 
     def forward(self, x_mask):
         x, mask = x_mask
 
-        attended = self.attention(x, mask)
+        attended = self.attention(x, x, x, mask)
 
         x = self.norm1(attended + x)
 
-        x = self.do(x)
+        x = self.do1(x)
 
         fedforward = self.ff(x)
 
         x = self.norm2(fedforward + x)
 
-        x = self.do(x)
+        x = self.do2(x)
 
-        return x, mask
+        return x
+    
+class DecoderBlock(nn.Module):
+
+    def __init__(self, emb, heads, ff_hidden_mult=4, dropout=0.0):
+        super().__init__()
+
+        self.self_attention = Attention(emb, heads=heads)
+        self.enc_dec_attention = Attention(emb, heads=heads)
+
+        self.norm1 = nn.LayerNorm(emb)
+        self.norm2 = nn.LayerNorm(emb)
+        self.norm3 = nn.LayerNorm(emb)
+
+        self.ff = nn.Sequential(
+            nn.Linear(emb, ff_hidden_mult * emb),
+            nn.ReLU(),
+            nn.Linear(ff_hidden_mult * emb, emb)
+        )
+
+        self.do1 = nn.Dropout(dropout)
+        self.do2 = nn.Dropout(dropout)
+        self.do3 = nn.Dropout(dropout)
+
+    def forward(self, x_mask, m_mask):
+        x, self_mask = x_mask
+        memory, memory_mask = m_mask
+
+        self_attention_output = self.self_attention(x, x, x, self_mask)
+
+        x = self.norm1(self_attention_output + x)
+
+        x = self.do1(x)
+        
+        enc_dec_attention_output = self.enc_dec_attention(x, memory, memory, memory_mask)
+        
+        x = self.norm2(enc_dec_attention_output + x)
+        
+        x = self.do2(x)
+
+        fedforward = self.ff(x)
+
+        x = self.norm3(fedforward + x)
+
+        x = self.do3(x)
+
+        return x
 
 
-class Transformer(nn.Module):
+class Encoder(nn.Module):
 
-    def __init__(self, input_dim, emb, heads, depth, output_dim):
+    def __init__(self, emb, heads, depth):
+        super().__init__()
+
+        eblocks = []
+        for i in range(depth):
+            eblocks.append(
+                EncoderBlock(emb=emb, heads=heads))
+
+        self.eblocks = nn.Sequential(*eblocks)
+
+    def forward(self, tokens, h=None, mask=None):
+        if h is not None:
+            tokens = torch.cat((tokens, h), 1)
+
+        x = self.eblocks((tokens, mask))
+
+        return x
+    
+class Decoder(nn.Module):
+
+    def __init__(self, emb, heads, depth, output_dim):
         super().__init__()
 
         self.num_tokens = output_dim
 
-        self.token_embedding = nn.Linear(input_dim, emb)
-
-        tblocks = []
+        dblocks = []
         for i in range(depth):
-            tblocks.append(
-                TransformerBlock(emb=emb, heads=heads, mask=False))
+            dblocks.append(
+                EncoderBlock(emb=emb, heads=heads))
 
-        self.tblocks = nn.Sequential(*tblocks)
+        self.dblocks = nn.Sequential(*dblocks)
 
         self.toprobs = nn.Linear(emb, output_dim)
-
-    def forward(self, x, h, mask):
-
-        tokens = self.token_embedding(x)
+    
+    def forward(self, tokens, memory, h=None, mask=None, memory_mask=None):
         if h is not None:
             tokens = torch.cat((tokens, h), 1)
 
         b, t, e = tokens.size()
 
-        x, mask = self.tblocks((tokens, mask))
+        x, mask = self.dblocks((tokens, mask), (memory, memory_mask))
 
         x = self.toprobs(x.view(b * t, e)).view(b, t, self.num_tokens)
 
         return x
     
-    def forward_embedding(self, tokens, h, mask):
-        if h is not None:
-            tokens = torch.cat((tokens, h), 1)
+class Transformer(nn.Module):
 
-        b, t, e = tokens.size()
+    def __init__(self, emb, heads, depth, output_dim):
+        super().__init__()
 
-        x, mask = self.tblocks((tokens, mask))
+        self.encoder = Encoder(emb=emb, heads=heads, depth=depth)
+        self.decoder = Decoder(emb=emb, heads=heads, depth=depth, output_dim=output_dim)
+    
+    def forward(self, src, tgt, src_h=None, tgt_h=None, src_mask=None, tgt_mask=None):
+        memory = self.encoder(src, h=src_h, mask=src_mask)
+        output = self.decoder(tgt, memory, h=tgt_h, mask=tgt_mask, memory_mask=src_mask)
 
-        x = self.toprobs(x.view(b * t, e)).view(b, t, self.num_tokens)
-
-        return x
+        return output[:, :-tgt_h.shape[1]] if tgt_h else None, \
+               memory[:, -src_h.shape[1]:] if src_h else None, \
+               output[:, -tgt_h.shape[1]:] if tgt_h else None
 
 def mask_(matrices, maskval=0.0, mask_diagonal=True):
 
@@ -161,7 +228,7 @@ if __name__ == '__main__':
 
 
     # testing the agent
-    agent = UPDeT(None, args).cuda()
+    agent = Encoder(None, args).cuda()
     hidden_state = agent.init_hidden().cuda().expand(args.ally_num, 1, -1)
     tensor = torch.rand(args.ally_num, args.ally_num+args.enemy_num, args.token_dim).cuda()
     q_list = []
