@@ -44,6 +44,10 @@ class BaseRunner:
         
         self.env_belief = algo_args["angel"].get("env_belief", False)
         self.env_belief_matter = algo_args["angel"].get("env_belief_matter", False)
+        self.actor_divide_conquer = algo_args["angel"].get("actor_divide_conquer", False)
+        if self.actor_divide_conquer:
+            assert algo_args["angel"].get("actor_use_updet", False), \
+                "When 'actor_divide_conquer' is set to <True>, 'actor_use_updet' must be set to <True> also!"
         if self.env_belief:
             env_prior_path = algo_args["angel"].get("env_prior_path", "./env_prior.npy")
             if os.path.exists(env_prior_path):
@@ -211,6 +215,8 @@ class BaseRunner:
                                   else eval_angel_env_belief[:, agent_id]) if self.env_belief else None,
                     deterministic=True,
                 )
+                if self.actor_divide_conquer:
+                    eval_actions, _ = eval_actions
                 eval_angel_rnn_states[:, agent_id] = _t2n(temp_rnn_state)
                 eval_angel_actions_collector.append(_t2n(eval_actions))
             eval_angel_actions = np.array(eval_angel_actions_collector).transpose(1, 0, 2)

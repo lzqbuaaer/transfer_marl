@@ -44,6 +44,8 @@ class OnPolicyRunner(BaseRunner):
                     scheme["belief"] = {"vshape": (self.env_belief_dim,), "offset": 0}
                     scheme["obs"]["extra"] = ["sample_next"]
                     scheme["masks"]["extra"] = ["sample_next"]
+                if self.actor_divide_conquer:
+                    scheme["chosens"] = {"vshape": (self.num_angels + self.num_demons - 1,), "offset": 0}
                 if self.action_type == "Discrete":
                     scheme["available_actions"] = {"vshape": (self.envs.action_space[0][agent_id].n,), "offset": 1, "init_value": 1}
                 self.buffers.append(EpisodeBuffer(algo_args["angel"], self.n_rollout_threads, scheme))
@@ -101,6 +103,9 @@ class OnPolicyRunner(BaseRunner):
                     values, angel_actions, action_log_probs, angel_rnn_states, rnn_states_critic, beliefs, rnn_states_belief = self.collect(step)
                 else:
                     values, angel_actions, action_log_probs, angel_rnn_states, rnn_states_critic = self.collect(step)
+                
+                if self.actor_divide_conquer:
+                    angel_actions, angel_chosens = angel_actions
                     
                 demon_actions_collector = []
                 for agent_id in range(self.num_demons):
@@ -140,6 +145,8 @@ class OnPolicyRunner(BaseRunner):
                     "infos": infos[0], "value_preds": values, "actions": angel_actions, "action_log_probs": action_log_probs,
                     "rnn_states_actor": angel_rnn_states, "rnn_states_critic": rnn_states_critic, "filled": filled
                 }
+                if self.actor_divide_conquer:
+                    data.update({"chosens": angel_chosens})
                 if self.env_belief:
                     data.update({"belief": beliefs, "rnn_states_belief": rnn_states_belief})
                 if "available_actions" in self.buffers[0].data:
@@ -186,6 +193,8 @@ class OnPolicyRunner(BaseRunner):
         if self.env_belief:
             belief_collector = []
             rnn_state_belief_collector = []
+        if self.actor_divide_conquer:
+            chosen_collector = []
 
         for agent_id in range(self.num_angels):
             if self.env_belief:
@@ -214,6 +223,9 @@ class OnPolicyRunner(BaseRunner):
                 if "available_actions" in self.buffers[agent_id].data else None,
                 env_belief = self.angel_env_belief_ground_truth[:, agent_id] if (self.env_belief and self.env_belief_matter) else belief_np
             )
+            if self.actor_divide_conquer:
+                action, chosen = action
+                chosen_collector.append(_t2n(chosen))
             value, rnn_state_critic = self.critic(
                 self.buffers[agent_id].data["share_obs"][:, step],
                 self.buffers[agent_id].data["rnn_states_critic"][:, step],
@@ -227,6 +239,9 @@ class OnPolicyRunner(BaseRunner):
             rnn_state_critic_collector.append(_t2n(rnn_state_critic))
 
         actions = np.stack(action_collector, axis=1)
+        if self.actor_divide_conquer:
+            chosens = np.stack(chosen_collector, axis=1)
+            actions = (actions, chosens)
         action_log_probs = np.stack(action_log_prob_collector, axis=1)
         rnn_states = np.stack(rnn_state_collector, axis=1)
         values = np.stack(value_collector, axis=1)

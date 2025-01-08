@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import os
 import numpy as np
 from torch.distributions import Categorical, Uniform
@@ -31,6 +32,7 @@ class PPOActor(nn.Module):
         self.env_belief = args.get("env_belief", False)
         self.env_belief_dim = args.get("env_belief_dim", 0)
         print(self.env_belief, self.env_belief_dim)
+        self.actor_divide_conquer = args.get("actor_divide_conquer", False)
 
         obs_shape = get_shape_from_obs_space(obs_space)
         self.act_shape = get_onehot_shape_from_act_space(self.action_space)
@@ -86,6 +88,10 @@ class PPOActor(nn.Module):
             self.transformer = Encoder(emb=self.hidden_sizes[-1], heads=self.heads, 
                                        depth=self.depth)
             self.act = nn.Linear(self.hidden_sizes[-1], 6)
+            
+            if self.actor_divide_conquer:
+                self.agent_relative = Encoder(emb=self.hidden_sizes[-1], heads=self.heads,
+                                              depth=self.depth)
 
         self.action_type = action_space.__class__.__name__
         if self.action_type == "Box":
@@ -110,7 +116,7 @@ class PPOActor(nn.Module):
             action_dist = Categorical(logits=actor_out)        
         return action_dist
 
-    def forward(self, obs, rnn_states, masks, available_actions=None, env_belief=None):
+    def forward(self, obs, rnn_states, masks, available_actions=None, env_belief=None, deterministic=False, chosen_specify=None):
         # obs_alignment
         obs = check(obs).to(**self.tpdv)
         
@@ -139,10 +145,52 @@ class PPOActor(nn.Module):
             obs_ally_embedding = self.ally_feat_token_embedding(obs_ally)
             obs_embedding = torch.cat([obs_own_embedding, obs_enemy_embedding, obs_ally_embedding], dim=-2)
             
+            # Calculate the relationship between agents in order to divide and conquer
+            if self.actor_divide_conquer:
+                if self.use_recurrent_policy:
+                    rnn_states_dc = rnn_states.clone()
+                    if obs_embedding.shape[0] == rnn_states_dc.shape[0]:
+                        rnn_states_dc = rnn_states_dc * masks.squeeze(-1).view(-1, 1, 1).repeat(1, self.recurrent_n, rnn_states_dc.shape[-1])
+                        output_dc = self.transformer.forward(obs_embedding, rnn_states_dc, None)
+                        relationships = output_dc[:, :-self.recurrent_n, :]
+                    else:
+                        T = int(obs_embedding.shape[0] / rnn_states_dc.shape[0])
+                        obs_embedding = obs_embedding.view(T, rnn_states_dc.shape[0], *obs_embedding.shape[1:])
+                        masks = masks.view(T, rnn_states_dc.shape[0])
+                        relationships = []
+                        for t in range(T):
+                            rnn_states_dc = rnn_states_dc * masks[t].view(-1, 1, 1).repeat(1, self.recurrent_n, rnn_states_dc.shape[-1])
+                            output_dc = self.transformer.forward(obs_embedding[t], rnn_states_dc, None)
+                            relationships.append(output_dc[:, :-self.recurrent_n, :])
+                            rnn_states_dc = output_dc[:, -self.recurrent_n:, :]
+                        relationships = torch.cat(relationships, dim=0)
+                else:
+                    relationships = self.transformer.forward(obs_embedding, None, None)
+                reference = relationships[:, 0, :]
+                comparisons = relationships[:, 1:, :]
+                cosine_sim = F.cosine_similarity(reference.unsqueeze(1), comparisons, dim=-1)
+                probs = (cosine_sim + 1) / 2    # [batch, entity_num - 1]
+                if chosen_specify is not None:
+                    chosen = chosen_specify.bool()
+                elif not deterministic:
+                    chosen = torch.bernoulli(probs).bool()
+                else:
+                    chosen = probs > 0.5
+                chosen_prob = torch.where(chosen, probs, 1 - probs).prod(dim=-1).unsqueeze(-1)  # [batch, 1]
+                if self.use_recurrent_policy:
+                    chosen_mask = torch.ones(obs_embedding.shape[0], obs_embedding.shape[1] + self.recurrent_n).bool().to(**self.tpdv)
+                else:
+                    chosen_mask = torch.ones(obs_embedding.shape[0], obs_embedding.shape[1]).bool().to(**self.tpdv)
+                chosen_mask[:, 1: (1 + chosen.shape[1])] = chosen
+                if available_actions is not None:
+                    available_actions[:, 6:][chosen[:, :self.args["n_enemies"]]==False] = 0.
+            else:
+                chosen_mask = None
+                            
             if self.use_recurrent_policy:
                 if obs_embedding.shape[0] == rnn_states.shape[0]:
                     rnn_states = rnn_states * masks.squeeze(-1).view(-1, 1, 1).repeat(1, self.recurrent_n, rnn_states.shape[-1])
-                    output = self.transformer.forward(obs_embedding, rnn_states, None)
+                    output = self.transformer.forward(obs_embedding, rnn_states, chosen_mask)
                     actor_features = output[:, :-self.recurrent_n, :]
                     rnn_states = output[:, -self.recurrent_n:, :]
                 else:
@@ -152,13 +200,13 @@ class PPOActor(nn.Module):
                     actor_features = []
                     for t in range(T):
                         rnn_states = rnn_states * masks[t].view(-1, 1, 1).repeat(1, self.recurrent_n, rnn_states.shape[-1])
-                        actor_feature = self.transformer.forward(obs_embedding[t], rnn_states, None)
+                        actor_feature = self.transformer.forward(obs_embedding[t], rnn_states, chosen_mask)
                         actor_features.append(actor_feature[:, :-self.recurrent_n, :])
                         rnn_states = actor_feature[:, -self.recurrent_n:, :]
                     actor_features = torch.cat(actor_features, dim=0)
                     
             else:
-                actor_features = self.transformer.forward(obs_embedding, None, None)
+                actor_features = self.transformer.forward(obs_embedding, None, chosen_mask)
 
             
         if self.env_belief:
@@ -185,4 +233,7 @@ class PPOActor(nn.Module):
                 logits[available_actions == 0] = -1e10
             action_dist = FixedCategorical(logits=logits)
         
-        return action_dist, rnn_states
+        if self.actor_divide_conquer:
+            return (action_dist, chosen, chosen_prob), rnn_states
+        else:
+            return action_dist, rnn_states

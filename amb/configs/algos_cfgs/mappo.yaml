@@ -131,6 +131,7 @@ belief_epoch: 5
 belief_num_mini_batch: 1
 
 actor_use_updet: False
+actor_divide_conquer: False
 obs_transformer_heads: 3
 obs_transformer_depth: 2
 obs_own_feat: 9

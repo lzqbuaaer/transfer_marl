@@ -148,6 +148,7 @@ class Encoder(nn.Module):
 
     def __init__(self, emb, heads, depth):
         super().__init__()
+        self.heads = heads
         self.eblocks = nn.ModuleList([EncoderBlock(emb=emb, heads=heads) for _ in range(depth)])
 
     def forward(self, tokens, h=None, mask=None):
@@ -155,6 +156,12 @@ class Encoder(nn.Module):
             x = torch.cat((tokens, h), 1)
         else:
             x = tokens
+            
+        if mask is not None:
+            assert mask.shape[-1] == x.shape[1]
+            mask = mask.unsqueeze(1).unsqueeze(1)           # [b, 1, 1, t_k]
+            mask = mask.expand(-1, self.heads, x.shape[1], -1)       # [b, h, t_q, t_k]
+            mask = mask.reshape(-1, *mask.shape[2:])        # [b * h, t_q, t_k]
 
         for eblock in self.eblocks:
             x = eblock((x, mask))
@@ -167,6 +174,7 @@ class Decoder(nn.Module):
         super().__init__()
 
         self.num_tokens = output_dim
+        self.heads = heads
 
         self.dblocks = nn.ModuleList([DecoderBlock(emb=emb, heads=heads) for _ in range(depth)])
 
@@ -179,6 +187,18 @@ class Decoder(nn.Module):
             x = tokens
 
         b, t, e = tokens.size()
+        
+        if mask is not None:
+            assert mask.shape[-1] == x.shape[1]
+            mask = mask.unsqueeze(1).unsqueeze(1)           # [b, 1, 1, t_k]
+            mask = mask.expand(-1, self.heads, t, -1)       # [b, h, t_q, t_k]
+            mask = mask.reshape(-1, *mask.shape[2:])        # [b * h, t_q, t_k]
+            
+        if memory_mask is not None:
+            assert memory_mask.shape[-1] == memory.shape[1]
+            memory_mask = memory_mask.unsqueeze(1).unsqueeze(1)           # [b, 1, 1, t_k]
+            memory_mask = memory_mask.expand(-1, self.heads, t, -1)       # [b, h, t_q, t_k]
+            memory_mask = memory_mask.reshape(-1, *memory_mask.shape[2:])        # [b * h, t_q, t_k]
         
         for dblock in self.dblocks:
             x = dblock((x, mask), (memory, memory_mask))

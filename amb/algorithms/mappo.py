@@ -44,6 +44,7 @@ class MAPPO:
         
         self.env_belief = args.get("env_belief", False)
         self.env_belief_matter = args.get("env_belief_matter", False)
+        self.actor_divide_conquer = args.get("actor_divide_conquer", False)
         if self.env_belief:
             env_prior_path = args.get("env_prior_path", "./env_prior.npy")
             self.env_prior = torch.tensor(np.load(env_prior_path)).to(device)
@@ -123,12 +124,22 @@ class MAPPO:
                 update_linear_schedule(self.actor_optimizers[agent_id], episode, episodes, self.lr)
 
     def evaluate_actions(self, agent_id, obs, rnn_states, action, masks, available_actions=None, active_masks=None, env_belief=None):
+        if self.actor_divide_conquer:
+            action, chosen = action
+            chosen = check(chosen).to(**self.tpdv)
+        else:
+            chosen = None
         action = check(action).to(**self.tpdv)
         if active_masks is not None:
             active_masks = check(active_masks).to(**self.tpdv)
 
-        action_dist, _ = self.actors[agent_id](obs, rnn_states, masks, available_actions, env_belief=env_belief)
+        action_dist, _ = self.actors[agent_id](obs, rnn_states, masks, available_actions, env_belief=env_belief, chosen_specify=chosen)
+        if self.actor_divide_conquer:
+            action_dist, _, chosen_prob = action_dist
+        
         action_log_probs = action_dist.log_probs(action)
+        if self.actor_divide_conquer:
+            action_log_probs = action_log_probs + torch.log(chosen_prob)
         if active_masks is not None:
             if self.action_type == "Discrete":
                 dist_entropy = (
@@ -147,6 +158,8 @@ class MAPPO:
         obs = sample["obs"]
         rnn_states_actor = sample["rnn_states_actor"]
         actions = sample["actions"]
+        if self.actor_divide_conquer:
+            chosens = sample["chosens"]
         masks = sample["masks"]
         active_masks = sample["active_masks"]
         old_action_log_probs = sample["action_log_probs"]
@@ -166,8 +179,12 @@ class MAPPO:
         active_masks = check(active_masks).to(**self.tpdv)
 
         # reshape to do in a single forward pass for all steps
-        action_log_probs, dist_entropy = self.evaluate_actions(
-            agent_id, obs, rnn_states_actor, actions, masks, available_actions, active_masks, env_belief=belief)
+        if self.actor_divide_conquer:
+            action_log_probs, dist_entropy = self.evaluate_actions(
+                agent_id, obs, rnn_states_actor, (actions, chosens), masks, available_actions, active_masks, env_belief=belief)
+        else:
+            action_log_probs, dist_entropy = self.evaluate_actions(
+                agent_id, obs, rnn_states_actor, actions, masks, available_actions, active_masks, env_belief=belief)
         # update actor
         imp_weights = getattr(torch, self.action_aggregation)(
             torch.exp(action_log_probs - old_action_log_probs), dim=-1, keepdim=True)
@@ -349,6 +366,8 @@ class MAPPO:
         train_info["dist_entropy"] = 0
         train_info["actor_grad_norm"] = 0
         train_info["ratio"] = 0
+        if self.actor_divide_conquer:
+            train_info["sub_group_size"] = 0
 
         for _ in range(self.ppo_epoch):
             if self.use_recurrent_policy:
@@ -363,6 +382,9 @@ class MAPPO:
                 train_info["dist_entropy"] += dist_entropy.item()
                 train_info["actor_grad_norm"] += actor_grad_norm
                 train_info["ratio"] += imp_weights.mean()
+                if self.actor_divide_conquer:
+                    train_info["sub_group_size"] += 1 + sample["chosens"].sum(axis=-1).mean()
+
 
         num_updates = self.ppo_epoch * self.actor_num_mini_batch
 
@@ -377,6 +399,8 @@ class MAPPO:
         train_info["dist_entropy"] = 0
         train_info["actor_grad_norm"] = 0
         train_info["ratio"] = 0
+        if self.actor_divide_conquer:
+            train_info["sub_group_size"] = 0
 
         for _ in range(self.ppo_epoch):
             data_generators = []
@@ -394,6 +418,8 @@ class MAPPO:
                 train_info["dist_entropy"] += dist_entropy.item()
                 train_info["actor_grad_norm"] += actor_grad_norm
                 train_info["ratio"] += imp_weights.mean()
+                if self.actor_divide_conquer:
+                    train_info["sub_group_size"] += 1 + batches["chosens"].sum(axis=-1).mean()
 
         num_updates = self.ppo_epoch * self.actor_num_mini_batch
 
