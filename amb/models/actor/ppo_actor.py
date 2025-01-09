@@ -6,7 +6,7 @@ import numpy as np
 from torch.distributions import Categorical, Uniform
 from amb.models.base.cnn import CNNLayer
 from amb.models.base.mlp import MLPBase
-from amb.models.base.transformers import Encoder
+from amb.models.base.transformers import Encoder, Transformer
 from amb.models.base.env import EnvLayer
 from amb.models.base.rnn import RNNLayer
 from amb.models.base.act import ACTLayer
@@ -33,6 +33,9 @@ class PPOActor(nn.Module):
         self.env_belief_dim = args.get("env_belief_dim", 0)
         print(self.env_belief, self.env_belief_dim)
         self.actor_divide_conquer = args.get("actor_divide_conquer", False)
+        self.actor_use_dt2gs = args.get("actor_use_dt2gs", False)
+        if self.actor_use_dt2gs:
+            self.actor_skills_num = args.get("actor_skills_num", 4)
 
         obs_shape = get_shape_from_obs_space(obs_space)
         self.act_shape = get_onehot_shape_from_act_space(self.action_space)
@@ -52,7 +55,7 @@ class PPOActor(nn.Module):
             self.cnn = nn.Identity()
             input_dim = obs_shape[0]
 
-        if not self.actor_use_updet:
+        if not (self.actor_use_updet or self.actor_use_dt2gs):
             self.base = MLPBase(args, input_dim)
 
             if self.use_recurrent_policy:
@@ -85,13 +88,29 @@ class PPOActor(nn.Module):
             self.enemy_feat_token_embedding = nn.Linear(self.enemy_feat, self.hidden_sizes[-1])
             self.ally_feat_token_embedding = nn.Linear(self.ally_feat, self.hidden_sizes[-1])
             
-            self.transformer = Encoder(emb=self.hidden_sizes[-1], heads=self.heads, 
-                                       depth=self.depth)
-            self.act = nn.Linear(self.hidden_sizes[-1], 6)
-            
-            if self.actor_divide_conquer:
-                self.agent_relative = Encoder(emb=self.hidden_sizes[-1], heads=self.heads,
-                                              depth=self.depth)
+            if self.actor_use_dt2gs:       # DT2GS
+                self.skill_embedding = nn.Linear(self.actor_skills_num, self.hidden_sizes[-1])
+                self.skill_encoder = MLPBase(args, 2 * self.hidden_sizes[-1])
+                if self.use_recurrent_policy:
+                    self.rnn = RNNLayer(
+                        self.hidden_sizes[-1],
+                        self.hidden_sizes[-1],
+                        self.recurrent_n,
+                        self.initialization_method,
+                    )
+                self.skill_choose = nn.Linear(self.hidden_sizes[-1], self.actor_skills_num)
+                
+                self.transformer = Transformer(emb=self.hidden_sizes[-1], heads=self.heads, 
+                                               depth=self.depth, output_dim=1)
+                self.act = nn.Linear(2 * self.hidden_sizes[-1], 6)
+            elif self.actor_use_updet:
+                self.transformer = Encoder(emb=self.hidden_sizes[-1], heads=self.heads, 
+                                        depth=self.depth)
+                self.act = nn.Linear(self.hidden_sizes[-1], 6)
+                
+                if self.actor_divide_conquer:
+                    self.agent_relative = Encoder(emb=self.hidden_sizes[-1], heads=self.heads,
+                                                depth=self.depth)
 
         self.action_type = action_space.__class__.__name__
         if self.action_type == "Box":
@@ -116,7 +135,10 @@ class PPOActor(nn.Module):
             action_dist = Categorical(logits=actor_out)        
         return action_dist
 
-    def forward(self, obs, rnn_states, masks, available_actions=None, env_belief=None, deterministic=False, chosen_specify=None):
+    def forward(self, obs, rnn_states, masks, available_actions=None, env_belief=None, previous_skills=None, deterministic=False, chosen_specify=None):
+        if self.actor_use_dt2gs:
+            return self.forward_dt2gs(obs, rnn_states, masks, available_actions=available_actions, previous_skills=previous_skills)
+        
         # obs_alignment
         obs = check(obs).to(**self.tpdv)
         
@@ -164,6 +186,8 @@ class PPOActor(nn.Module):
                             relationships.append(output_dc[:, :-self.recurrent_n, :])
                             rnn_states_dc = output_dc[:, -self.recurrent_n:, :]
                         relationships = torch.cat(relationships, dim=0)
+                        obs_embedding = obs_embedding.view(-1, *obs_embedding.shape[2:])
+                        masks = masks.view(-1, *masks.shape[2:])
                 else:
                     relationships = self.transformer.forward(obs_embedding, None, None)
                 reference = relationships[:, 0, :]
@@ -187,6 +211,7 @@ class PPOActor(nn.Module):
             else:
                 chosen_mask = None
                             
+            # Caculate the actor features
             if self.use_recurrent_policy:
                 if obs_embedding.shape[0] == rnn_states.shape[0]:
                     rnn_states = rnn_states * masks.squeeze(-1).view(-1, 1, 1).repeat(1, self.recurrent_n, rnn_states.shape[-1])
@@ -196,14 +221,18 @@ class PPOActor(nn.Module):
                 else:
                     T = int(obs_embedding.shape[0] / rnn_states.shape[0])
                     obs_embedding = obs_embedding.view(T, rnn_states.shape[0], *obs_embedding.shape[1:])
+                    chosen_mask = chosen_mask.view(T, rnn_states.shape[0], *chosen_mask.shape[1:])
                     masks = masks.view(T, rnn_states.shape[0])
                     actor_features = []
                     for t in range(T):
                         rnn_states = rnn_states * masks[t].view(-1, 1, 1).repeat(1, self.recurrent_n, rnn_states.shape[-1])
-                        actor_feature = self.transformer.forward(obs_embedding[t], rnn_states, chosen_mask)
+                        actor_feature = self.transformer.forward(obs_embedding[t], rnn_states, chosen_mask[t])
                         actor_features.append(actor_feature[:, :-self.recurrent_n, :])
                         rnn_states = actor_feature[:, -self.recurrent_n:, :]
                     actor_features = torch.cat(actor_features, dim=0)
+                    obs_embedding = obs_embedding.view(-1, *obs_embedding.shape[2:])
+                    chosen_mask = chosen_mask.view(-1, *chosen_mask.shape[2:])
+                    masks = masks.view(-1, *masks.shape[2:])
                     
             else:
                 actor_features = self.transformer.forward(obs_embedding, None, chosen_mask)
@@ -237,3 +266,94 @@ class PPOActor(nn.Module):
             return (action_dist, chosen, chosen_prob), rnn_states
         else:
             return action_dist, rnn_states
+        
+    def forward_dt2gs(self, obs, rnn_states, masks, available_actions=None, previous_skills=None):
+        obs = check(obs).to(**self.tpdv)
+        
+        rnn_states = check(rnn_states).to(**self.tpdv)
+        masks = check(masks).to(**self.tpdv)
+        assert previous_skills is not None
+        previous_skills = check(previous_skills).to(**self.tpdv)
+        
+        if available_actions is not None:
+            available_actions = check(available_actions).to(**self.tpdv)
+            
+        obs_own = obs[..., self.ally_feat_length + self.enemy_feat_length:].unsqueeze(-2)
+        obs_own_embedding = self.own_feat_token_embedding(obs_own)
+        obs_enemy = obs[..., self.ally_feat_length: self.ally_feat_length + self.enemy_feat_length].reshape(*obs.shape[:-1], -1, self.enemy_feat)
+        obs_enemy_embedding = self.enemy_feat_token_embedding(obs_enemy)
+        obs_ally = obs[..., :self.ally_feat_length].reshape(*obs.shape[:-1], -1, self.ally_feat)
+        obs_ally_embedding = self.ally_feat_token_embedding(obs_ally)
+        obs_embedding = torch.cat([obs_own_embedding, obs_enemy_embedding, obs_ally_embedding], dim=-2)
+        previous_skills_embedding = self.skill_embedding(previous_skills).unsqueeze(-2).expand(-1, obs_embedding.shape[1], -1)
+        
+        skill_features = self.skill_encoder(torch.cat([obs_embedding, previous_skills_embedding], dim=-1))
+        assert skill_features.size() == (obs.shape[0], self.args["n_agents"] + self.args["n_enemies"], self.hidden_sizes[-1])
+        if self.use_recurrent_policy:
+            if obs_embedding.shape[0] == rnn_states.shape[0]:
+                rnn_states = rnn_states * masks.squeeze(-1).view(-1, 1, 1).repeat(1, self.recurrent_n, rnn_states.shape[-1])
+                
+                skill_features_rnn = []
+                rnn_states_skill = rnn_states.clone()
+                for i in range(self.args["n_agents"] + self.args["n_enemies"]):
+                    skill_feature_rnn, _ = self.rnn(skill_features[:, i], rnn_states_skill, masks)
+                    skill_features_rnn.append(skill_feature_rnn)
+                skill_features = torch.stack(skill_features_rnn, dim=1)
+                skill_features = skill_features.mean(dim=1)
+                skill_chosens = self.skill_choose(skill_features)
+                skill_chosens = torch.nn.functional.gumbel_softmax(skill_chosens, dim=-1)
+                new_skill_features = self.skill_embedding(skill_chosens).unsqueeze(-2)
+                transformer_outputs, rnn_states, _, memorys = self.transformer.forward_hidden_state(obs_embedding, new_skill_features, src_h=rnn_states)
+            else:
+                T = int(obs_embedding.shape[0] / rnn_states.shape[0])
+                obs_embedding = obs_embedding.view(T, rnn_states.shape[0], *obs_embedding.shape[1:])
+                masks = masks.view(T, rnn_states.shape[0])
+                skill_features = skill_features.view(T, rnn_states.shape[0], *skill_features.shape[1:])
+                transformer_outputs, memorys, skill_chosens = [], [], []
+                for t in range(T):
+                    rnn_states = rnn_states * masks[t].view(-1, 1, 1).repeat(1, self.recurrent_n, rnn_states.shape[-1])
+                    skill_features_rnn = []
+                    rnn_states_skill = rnn_states.clone()
+                    for i in range(self.args["n_agents"] + self.args["n_enemies"]):
+                        skill_feature_rnn, _ = self.rnn(skill_features[t, :, i], rnn_states_skill, masks[t])
+                        skill_features_rnn.append(skill_feature_rnn)
+                    skill_features = torch.stack(skill_features_rnn, dim=1)
+                    skill_features = skill_features.mean(dim=1)
+                    skill_chosen = self.skill_choose(skill_features)
+                    skill_chosen = torch.nn.functional.gumbel_softmax(skill_chosen, dim=-1)
+                    skill_chosens.append(skill_chosen)
+                    new_skill_features = self.skill_embedding(skill_chosen).unsqueeze(-2)
+                    transformer_output, rnn_states, _, memory = self.transformer.forward_hidden_state(obs_embedding[t], new_skill_features, src_h=rnn_states)
+                    transformer_outputs.append(transformer_output)
+                    memorys.append(memory)
+                transformer_outputs = torch.cat(transformer_outputs, dim=0)
+                memorys = torch.cat(memorys, dim=0)
+                skill_chosens = torch.cat(skill_chosens, dim=0)
+                obs_embedding = obs_embedding.view(-1, *obs_embedding.shape[2:])
+                masks = masks.view(-1, *masks.shape[2:])
+                skill_features = skill_features.view(-1, *skill_features.shape[2:])
+        else:
+            skill_features = skill_features.mean(dim=1)
+            skill_chosens = torch.nn.functional.gumbel_softmax(skill_features, dim=-1)
+            skill_chosens = self.skill_choose(skill_chosens)
+            new_skill_features = self.skill_embedding(skill_chosens).unsqueeze(-2)
+            transformer_outputs, _, _, memorys = self.transformer.forward_hidden_state(obs_embedding, new_skill_features, src_h=None)
+        
+        transformer_outputs = transformer_outputs.expand(-1, memorys.shape[1], -1)
+        total_features = torch.cat([memorys, transformer_outputs], dim=-1)
+        basic_actions = self.act(total_features[..., 0, :])
+
+        # each enemy has an output Q
+        enemies_actions = []
+        for i in range(self.args['n_enemies']):
+            enemy_action = self.act(total_features[:, 1 + i, :])
+            enemy_action = torch.mean(enemy_action, dim=-1)
+            enemies_actions.append(enemy_action)
+        enemies_actions = torch.stack(enemies_actions, dim=-1)
+
+        logits = torch.cat((basic_actions, enemies_actions), dim=-1)
+        if available_actions is not None:
+            logits[available_actions == 0] = -1e10
+        action_dist = FixedCategorical(logits=logits)
+        
+        return (action_dist, skill_chosens), rnn_states

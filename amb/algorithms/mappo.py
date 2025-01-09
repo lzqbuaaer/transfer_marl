@@ -45,6 +45,7 @@ class MAPPO:
         self.env_belief = args.get("env_belief", False)
         self.env_belief_matter = args.get("env_belief_matter", False)
         self.actor_divide_conquer = args.get("actor_divide_conquer", False)
+        self.actor_use_dt2gs = args.get("actor_use_dt2gs", False)
         if self.env_belief:
             env_prior_path = args.get("env_prior_path", "./env_prior.npy")
             self.env_prior = torch.tensor(np.load(env_prior_path)).to(device)
@@ -124,6 +125,11 @@ class MAPPO:
                 update_linear_schedule(self.actor_optimizers[agent_id], episode, episodes, self.lr)
 
     def evaluate_actions(self, agent_id, obs, rnn_states, action, masks, available_actions=None, active_masks=None, env_belief=None):
+        if self.actor_use_dt2gs:
+            action, previous_skills = action
+            previous_skills = check(previous_skills).to(**self.tpdv)
+        else:
+            previous_skills = None
         if self.actor_divide_conquer:
             action, chosen = action
             chosen = check(chosen).to(**self.tpdv)
@@ -133,7 +139,10 @@ class MAPPO:
         if active_masks is not None:
             active_masks = check(active_masks).to(**self.tpdv)
 
-        action_dist, _ = self.actors[agent_id](obs, rnn_states, masks, available_actions, env_belief=env_belief, chosen_specify=chosen)
+        action_dist, _ = self.actors[agent_id](obs, rnn_states, masks, available_actions, 
+                                               env_belief=env_belief, previous_skills=previous_skills, chosen_specify=chosen)
+        if self.actor_use_dt2gs:
+            action_dist, _ = action_dist
         if self.actor_divide_conquer:
             action_dist, _, chosen_prob = action_dist
         
@@ -160,6 +169,8 @@ class MAPPO:
         actions = sample["actions"]
         if self.actor_divide_conquer:
             chosens = sample["chosens"]
+        if self.actor_use_dt2gs:
+            previous_skills = sample["previous_skills"]
         masks = sample["masks"]
         active_masks = sample["active_masks"]
         old_action_log_probs = sample["action_log_probs"]
@@ -180,11 +191,11 @@ class MAPPO:
 
         # reshape to do in a single forward pass for all steps
         if self.actor_divide_conquer:
-            action_log_probs, dist_entropy = self.evaluate_actions(
-                agent_id, obs, rnn_states_actor, (actions, chosens), masks, available_actions, active_masks, env_belief=belief)
-        else:
-            action_log_probs, dist_entropy = self.evaluate_actions(
-                agent_id, obs, rnn_states_actor, actions, masks, available_actions, active_masks, env_belief=belief)
+            actions = (actions, chosens)
+        if self.actor_use_dt2gs:
+            actions = (actions, previous_skills)
+        action_log_probs, dist_entropy = self.evaluate_actions(
+            agent_id, obs, rnn_states_actor, actions, masks, available_actions, active_masks, env_belief=belief)
         # update actor
         imp_weights = getattr(torch, self.action_aggregation)(
             torch.exp(action_log_probs - old_action_log_probs), dim=-1, keepdim=True)

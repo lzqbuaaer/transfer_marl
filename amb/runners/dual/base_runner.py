@@ -45,6 +45,9 @@ class BaseRunner:
         self.env_belief = algo_args["angel"].get("env_belief", False)
         self.env_belief_matter = algo_args["angel"].get("env_belief_matter", False)
         self.actor_divide_conquer = algo_args["angel"].get("actor_divide_conquer", False)
+        self.actor_use_dt2gs = algo_args["angel"].get("actor_use_dt2gs", False)
+        if self.actor_use_dt2gs:
+            self.actor_skills_num = algo_args["angel"].get("actor_skills_num", 4)
         if self.actor_divide_conquer:
             assert algo_args["angel"].get("actor_use_updet", False), \
                 "When 'actor_divide_conquer' is set to <True>, 'actor_use_updet' must be set to <True> also!"
@@ -187,6 +190,8 @@ class BaseRunner:
             eval_bayesian_update = np.zeros((self.n_eval_rollout_threads), dtype=bool)
         else:
             eval_angel_env_belief = None
+        if self.actor_use_dt2gs:
+            eval_angel_previous_skills = np.zeros((self.n_eval_rollout_threads, self.num_angels, self.actor_skills_num))
 
         eval_angel_masks = np.ones((self.n_eval_rollout_threads, self.num_angels, 1), dtype=np.float32)
         eval_demon_masks = np.ones((self.n_eval_rollout_threads, self.num_demons, 1), dtype=np.float32)
@@ -213,8 +218,12 @@ class BaseRunner:
                     if eval_available_actions[0][0] is not None else None,
                     env_belief = (self.eval_angel_env_belief_ground_truth[:, agent_id] if self.env_belief_matter 
                                   else eval_angel_env_belief[:, agent_id]) if self.env_belief else None,
+                    previous_skills = eval_angel_previous_skills[:, agent_id] if self.actor_use_dt2gs else None,
                     deterministic=True,
                 )
+                if self.actor_use_dt2gs:
+                    eval_actions, skills = eval_actions
+                    eval_angel_previous_skills[:, agent_id] = _t2n(skills)
                 if self.actor_divide_conquer:
                     eval_actions, _ = eval_actions
                 eval_angel_rnn_states[:, agent_id] = _t2n(temp_rnn_state)
@@ -256,6 +265,8 @@ class BaseRunner:
 
             eval_angel_rnn_states[eval_dones_env == True] = 0
             eval_demon_rnn_states[eval_dones_env == True] = 0
+            if self.actor_use_dt2gs:
+                eval_angel_previous_skills[eval_dones_env == True] = 0
             if self.env_belief:
                 eval_angel_rnn_states_belief[eval_dones_env == True] = 0
                 eval_bayesian_update[eval_dones_env == True] = False

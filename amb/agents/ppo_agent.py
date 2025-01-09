@@ -21,13 +21,15 @@ class PPOAgent(BaseAgent):
         if self.env_belief:
             self.belief = TransformerBelief(args, device=device)
         self.actor_divide_conquer = args.get("actor_divide_conquer", False)
+        self.actor_use_dt2gs = args.get("actor_use_dt2gs", False)
 
-    def forward(self, obs, rnn_states, masks, available_actions=None, env_belief=None):
+    def forward(self, obs, rnn_states, masks, available_actions=None, env_belief=None, previous_skills=None):
+        actions, rnn_states = self.actor(obs, rnn_states, masks, available_actions=available_actions, env_belief=env_belief, previous_skills=previous_skills)
+        if self.actor_use_dt2gs:
+            actions, _ = actions
         if self.actor_divide_conquer:
-            actions, rnn_states = self.actor(obs, rnn_states, masks, available_actions=available_actions, env_belief=env_belief)
-            action_dist, _, _ = actions
-        else:
-            action_dist, rnn_states = self.actor(obs, rnn_states, masks, available_actions=available_actions, env_belief=env_belief)
+            actions, _, _ = actions
+        action_dist = actions
         
         return action_dist, rnn_states
     
@@ -44,32 +46,38 @@ class PPOAgent(BaseAgent):
         return actions, action_dist
 
     @torch.no_grad()
-    def perform(self, obs, rnn_states, masks, available_actions=None, env_belief=None, deterministic=False):
+    def perform(self, obs, rnn_states, masks, available_actions=None, env_belief=None, previous_skills=None, deterministic=False):
+        actions, rnn_states = self.actor(obs, rnn_states, masks, available_actions=available_actions, env_belief=env_belief, previous_skills=previous_skills, deterministic=deterministic)
+        
+        if self.actor_use_dt2gs:
+            actions, skills = actions
         if self.actor_divide_conquer:
-            actions, rnn_states = self.actor(obs, rnn_states, masks, available_actions=available_actions, env_belief=env_belief, deterministic=deterministic)
-            action_dist, chosen, _ = actions
-        else:
-            action_dist, rnn_states = self.actor(obs, rnn_states, masks, available_actions=available_actions, env_belief=env_belief)
+            actions, chosen, _ = actions
+        action_dist = actions
         actions = (action_dist.mode if deterministic else action_dist.sample())
         if self.actor_divide_conquer:
-            return (actions, chosen), rnn_states
-        else:
-            return actions, rnn_states
+            actions = (actions, chosen)
+        if self.actor_use_dt2gs:
+            actions = (actions, skills)
+        return actions, rnn_states
     
     @torch.no_grad()
-    def collect(self, obs, rnn_states, masks, available_actions=None, env_belief=None, t=0):
+    def collect(self, obs, rnn_states, masks, available_actions=None, env_belief=None, previous_skills=None, t=0):
+        actions, rnn_states = self.actor(obs, rnn_states, masks, available_actions=available_actions, env_belief=env_belief, previous_skills=previous_skills)
+        
+        if self.actor_use_dt2gs:
+            actions, skills = actions
         if self.actor_divide_conquer:
-            actions, rnn_states = self.actor(obs, rnn_states, masks, available_actions=available_actions, env_belief=env_belief)
-            action_dist, chosen, chosen_prob = actions
-        else:
-            action_dist, rnn_states = self.actor(obs, rnn_states, masks, available_actions=available_actions, env_belief=env_belief)
+            actions, chosen, chosen_prob = actions
+        action_dist = actions
         actions = action_dist.sample()
         action_log_probs = action_dist.log_probs(actions)
         if self.actor_divide_conquer:
+            actions = (actions, chosen)
             action_log_probs = action_log_probs + torch.log(chosen_prob)
-            return (actions, chosen), action_log_probs, rnn_states
-        else:
-            return actions, action_log_probs, rnn_states
+        if self.actor_use_dt2gs:
+            actions = (actions, skills)
+        return actions, action_log_probs, rnn_states
     
     def restore(self, path):
         state_dict = torch.load(os.path.join(path, "actor.pth"))

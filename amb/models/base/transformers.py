@@ -180,7 +180,7 @@ class Decoder(nn.Module):
 
         self.toprobs = nn.Linear(emb, output_dim)
     
-    def forward(self, tokens, memory, h=None, mask=None, memory_mask=None):
+    def forward(self, tokens, memory, h=None, mask=None, memory_mask=None, output_hidden_state=False):
         if h is not None:
             x = torch.cat((tokens, h), 1)
         else:
@@ -202,6 +202,9 @@ class Decoder(nn.Module):
         
         for dblock in self.dblocks:
             x = dblock((x, mask), (memory, memory_mask))
+        
+        if output_hidden_state:
+            return x
 
         x = self.toprobs(x.view(b * t, e)).view(b, t, self.num_tokens)
 
@@ -222,6 +225,15 @@ class Transformer(nn.Module):
         return output[:, :-tgt_h.shape[1]] if (tgt_h is not None) else output, \
                memory[:, -src_h.shape[1]:] if (src_h is not None) else None, \
                output[:, -tgt_h.shape[1]:] if (tgt_h is not None) else None
+               
+    def forward_hidden_state(self, src, tgt, src_h=None, tgt_h=None, src_mask=None, tgt_mask=None):
+        memory = self.encoder(src, h=src_h, mask=src_mask)
+        output = self.decoder(tgt, memory, h=tgt_h, mask=tgt_mask, memory_mask=src_mask, output_hidden_state=True)
+
+        return output[:, :-tgt_h.shape[1]] if (tgt_h is not None) else output, \
+               memory[:, -src_h.shape[1]:] if (src_h is not None) else None, \
+               output[:, -tgt_h.shape[1]:] if (tgt_h is not None) else None, \
+               memory[:, :-src_h.shape[1]:] if (src_h is not None) else memory
 
 def mask_(matrices, maskval=0.0, mask_diagonal=True):
 
