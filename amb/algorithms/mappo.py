@@ -325,10 +325,7 @@ class MAPPO:
         train_info["belief_grad_norm"] = 0
 
         for _ in range(self.belief_epoch):
-            if self.use_recurrent_policy:
-                data_generator = buffer.chunk_generator(self.belief_num_mini_batch, self.data_chunk_length)
-            else:
-                data_generator = buffer.step_generator(self.belief_num_mini_batch)
+            data_generator = buffer.chunk_generator(self.belief_num_mini_batch, self.data_chunk_length)
 
             for sample in data_generator:
                 difference, belief_grad_norm = self.update_belief(sample, agent_id)
@@ -447,10 +444,7 @@ class MAPPO:
         for _ in range(self.belief_epoch):
             data_generators = []
             for agent_id in range(self.num_agents):
-                if self.use_recurrent_policy:
-                    data_generator = buffers[agent_id].chunk_generator(self.belief_num_mini_batch, self.data_chunk_length)
-                else:
-                    data_generator = buffers[agent_id].step_generator(self.belief_num_mini_batch)
+                data_generator = buffers[agent_id].chunk_generator(self.belief_num_mini_batch, self.data_chunk_length)
                 data_generators.append(data_generator)
 
             for batches in self.share_generator(data_generators):
