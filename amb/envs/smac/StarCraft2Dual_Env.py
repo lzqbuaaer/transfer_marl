@@ -47,6 +47,8 @@ def process_env(env: StarCraft2Env, pipe):
                 ret = env.save_replay()
             elif command[0] == "get_env_info":
                 ret = env.get_env_info()
+            elif command[0] == "get_stats":
+                ret = env.get_stats()
         except Exception as e:
             import traceback
             traceback.print_exc()
@@ -153,22 +155,13 @@ class StarCraft2DualEnv(MultiAgentEnv):
             rewards = [[[0]] * self.n_angels, [[0]] * self.n_demons]
             rewards = [np.stack(rewards[i], axis=0) for i in range(2)]
             dones = [np.ones((self.n_angels), dtype=bool), np.ones((self.n_demons), dtype=bool)]
-            info_host = {
-                "battles_won": self.host_env.battles_won,
-                "battles_game": self.host_env.battles_game,
-                "battles_draw": self.host_env.timeouts,
-                "restarts": self.host_env.force_restarts,
-                "bad_transition": False,
-                "won": self.host_env.win_counted,
-            }
-            info_client = {
-                "battles_won": self.client_env.battles_won,
-                "battles_game": self.client_env.battles_game,
-                "battles_draw": self.client_env.timeouts,
-                "restarts": self.client_env.force_restarts,
-                "bad_transition": False,
-                "won": self.client_env.win_counted,
-            }
+            self.host_pipe.send(["get_stats"])
+            self.client_pipe.send(["get_stats"])
+            info_host, info_client = self.host_pipe.recv(), self.client_pipe.recv()
+            del info_host["win_rate"]
+            del info_client["win_rate"]
+            info_host["bad_transition"] = False
+            info_client["bad_transition"] = False
             if self.r:
                 infos = [[info_client] * self.n_angels, [info_host] * self.n_demons]
             else:

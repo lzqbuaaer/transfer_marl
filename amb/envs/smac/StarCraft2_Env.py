@@ -2479,7 +2479,7 @@ class StarCraft2Env(MultiAgentEnv):
             "battles_won": self.battles_won,
             "battles_game": self.battles_game,
             "battles_draw": self.timeouts,
-            "win_rate": self.battles_won / self.battles_game,
+            "win_rate": self.battles_won / self.battles_game if self.battles_game != 0 else 0,
             "timeouts": self.timeouts,
             "restarts": self.force_restarts,
         }
