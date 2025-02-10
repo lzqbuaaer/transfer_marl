@@ -74,6 +74,20 @@ class OnPolicyRunner(BaseRunner):
 
     def run(self):
         """Run the training (or rendering) pipeline."""
+        if self.algo_args["angel"]['matter_transfer_test']:
+            self.logger.init()
+            self.logger.episode_init(0)
+            print("Searching for the proper factors in transfer test of MATTER...")
+            self.eval(few_shot_learning_mode=True)
+            
+        if "eval_only" in self.algo_args['angel'] and self.algo_args['angel']['eval_only']:
+            print("[[EVAL MODE]]")
+            self.logger.init()  # logger callback at the beginning of training
+            self.logger.episode_init(0)
+            for _ in range(self.algo_args['angel']['eval_times']):
+                self.eval()
+            return
+
         if self.algo_args["angel"]['use_render'] is True:
             self.render()
             return

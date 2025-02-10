@@ -170,7 +170,9 @@ class BaseRunner:
         raise NotImplementedError
 
     @torch.no_grad()
-    def eval(self):
+    def eval(self, few_shot_learning_mode=False):
+        if few_shot_learning_mode:
+            assert self.env_belief and self.env_belief_matter
         """Evaluate the model. All algorithms should fit this evaluation pipeline."""
         self.algo.prep_rollout()
 
@@ -188,6 +190,8 @@ class BaseRunner:
             eval_angel_env_belief = np.zeros((self.n_eval_rollout_threads, self.num_angels, self.env_belief_dim), dtype=np.float32)
             eval_angel_env_belief[:] = self.env_prior
             eval_bayesian_update = np.zeros((self.n_eval_rollout_threads), dtype=bool)
+            if few_shot_learning_mode:
+                eval_angel_env_belief_list = [self.env_prior.copy() for _ in range(self.n_eval_rollout_threads * self.num_angels)]
         else:
             eval_angel_env_belief = None
         if self.actor_use_dt2gs:
@@ -210,6 +214,9 @@ class BaseRunner:
                     )
                     eval_angel_env_belief[eval_bayesian_update == True, agent_id] = _t2n(env_belief)[eval_bayesian_update == True]
                     eval_angel_rnn_states_belief[eval_bayesian_update == True, agent_id] = _t2n(rnn_state_belief)[eval_bayesian_update == True]
+                    if few_shot_learning_mode:
+                        eval_angel_env_belief_list.extend([eval_angel_env_belief[i, agent_id].copy() 
+                                                           for i in range(self.n_eval_rollout_threads) if eval_bayesian_update[i]])
                 eval_actions, temp_rnn_state = self.angels[agent_id].perform(
                     eval_obs[0][:, agent_id],
                     eval_angel_rnn_states[:, agent_id],
@@ -271,6 +278,9 @@ class BaseRunner:
                 eval_angel_rnn_states_belief[eval_dones_env == True] = 0
                 eval_bayesian_update[eval_dones_env == True] = False
                 eval_angel_env_belief[eval_dones_env == True, :] = self.env_prior
+                if few_shot_learning_mode:
+                    eval_angel_env_belief_list.extend([self.env_prior.copy() for i in range(self.n_eval_rollout_threads * self.num_angels) 
+                                                       if eval_bayesian_update[i % self.num_angels]])
 
             eval_angel_masks = np.ones((self.n_eval_rollout_threads, self.num_angels, 1), dtype=np.float32)
             eval_demon_masks = np.ones((self.n_eval_rollout_threads, self.num_demons, 1), dtype=np.float32)
@@ -282,8 +292,13 @@ class BaseRunner:
                     eval_episode += 1
                     self.logger.eval_thread_done(eval_i)  # logger callback when an episode is done
 
-            if eval_episode >= self.algo_args["angel"]["eval_episodes"]:
+            if eval_episode >= (self.algo_args["angel"]["eval_episodes"] if not few_shot_learning_mode 
+                                else self.algo_args["angel"]["matter_transfer_few_shot_episodes"]):
                 self.logger.eval_log(eval_episode)  # logger callback at the end of evaluation
+                if few_shot_learning_mode:
+                    self.env_prior = np.stack(eval_angel_env_belief_list, axis=0).mean(axis=0)
+                    self.eval_angel_env_belief_ground_truth[:] = self.env_prior
+                    self.angel_env_belief_ground_truth[:] = self.env_prior
                 break
 
     @torch.no_grad()
