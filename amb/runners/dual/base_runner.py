@@ -203,7 +203,7 @@ class BaseRunner:
         while True:
             eval_angel_actions_collector = []
             for agent_id in range(self.num_angels):
-                if self.env_belief and not self.env_belief_matter:
+                if self.env_belief and (not self.env_belief_matter or few_shot_learning_mode):
                     env_belief, rnn_state_belief = self.angels[agent_id].forward_belief(
                         eval_obs[0][:, agent_id],
                         last_reward[:, agent_id],
@@ -253,7 +253,6 @@ class BaseRunner:
             
             last_obs = eval_obs
             eval_obs, eval_share_obs, eval_rewards, eval_dones, eval_infos, eval_available_actions = self.eval_envs.step((eval_angel_actions, eval_demon_actions))
-            last_reward = eval_rewards[0]
             if self.env_belief:
                 eval_bayesian_update[:] = True
 
@@ -261,9 +260,12 @@ class BaseRunner:
             assert self.num_angels == eval_rewards[0].shape[1]
             assert self.num_demons == eval_rewards[1].shape[1]
             assert eval_rewards[0].shape[0] == eval_rewards[1].shape[0]
-            if self.reverse_team:
+            if self.reverse_team:   # Dual attack: flip the reward while training, here is the same
                 for process_id in range(eval_rewards[0].shape[0]):
                     eval_rewards[0][process_id, :, :] = np.mean(eval_rewards[1][process_id])
+                last_reward = -eval_rewards[0]
+            else:
+                last_reward = eval_rewards[0]
 
             eval_data = (eval_obs[0], eval_share_obs[0], eval_rewards[0], eval_dones[0], eval_infos[0], eval_available_actions[0])
             self.logger.eval_per_step(eval_data)  # logger callback at each step of evaluation
@@ -280,7 +282,7 @@ class BaseRunner:
                 eval_angel_env_belief[eval_dones_env == True, :] = self.env_prior
                 if few_shot_learning_mode:
                     eval_angel_env_belief_list.extend([self.env_prior.copy() for i in range(self.n_eval_rollout_threads * self.num_angels) 
-                                                       if eval_bayesian_update[i % self.num_angels]])
+                                                       if eval_bayesian_update[i % self.n_eval_rollout_threads]])
 
             eval_angel_masks = np.ones((self.n_eval_rollout_threads, self.num_angels, 1), dtype=np.float32)
             eval_demon_masks = np.ones((self.n_eval_rollout_threads, self.num_demons, 1), dtype=np.float32)

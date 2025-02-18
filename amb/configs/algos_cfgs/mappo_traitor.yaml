@@ -140,16 +140,22 @@ targeted_attack: False
 # logging directory
 log_dir: "./results"
 
-# obs/state_align
-obs_state_align: True
-align_type: "add_zero"
-obs_align_len: 400 # 164 (2s4z)
-state_align_len: 500 # 196 (2s4z)
+# multi-task transfer
+load_critic: True
+env_belief: False
+env_belief_matter: False
+matter_transfer_test: False
+matter_transfer_few_shot_episodes: 40
+env_prior_path: "./env_prior.npy"
+belief_epoch: 5
+belief_num_mini_batch: 1
 
-# action_space_align
-action_space_align: True
-action_align_len: 41 # largest map possible: 32-baneling, dim: 32 + 6 = 38
-
-static_env_net: True
-obs_feat_layer_grad_on: True
-
+actor_use_updet: False
+actor_divide_conquer: False
+actor_use_dt2gs: False
+actor_skills_num: 4
+obs_transformer_heads: 3
+obs_transformer_depth: 2
+obs_own_feat: 9
+obs_enemy_feat: 5
+obs_ally_feat: 5

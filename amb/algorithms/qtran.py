@@ -9,7 +9,7 @@ from amb.utils.model_utils import update_linear_schedule, get_grad_norm
 
 
 class QTran:
-    def __init__(self, args, num_agents, obs_spaces, share_obs_spaces, act_spaces, device=torch.device("cpu")):
+    def __init__(self, args, num_agents, obs_spaces, share_obs_spaces, act_spaces, device=torch.device("cpu"), agent_type="ori_victim", ally_num=2):
         self.args = args
         self.device = device
         self.tpdv = dict(dtype=torch.float32, device=device)

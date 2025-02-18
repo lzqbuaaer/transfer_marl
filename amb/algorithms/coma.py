@@ -11,7 +11,7 @@ from amb.utils.trans_utils import _t2n
 from torch.optim import RMSprop
 
 class COMA:
-    def __init__(self, args, num_agents, obs_spaces, share_obs_space, act_spaces, device=torch.device("cpu")):
+    def __init__(self, args, num_agents, obs_spaces, share_obs_space, act_spaces, device=torch.device("cpu"), agent_type="ori_victim", ally_num=2):
         self.args = args
         self.device = device
         self.tpdv = dict(dtype=torch.float32, device=device)
