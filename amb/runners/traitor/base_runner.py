@@ -43,6 +43,27 @@ class BaseRunner:
 
         self.share_param = algo_args["train"]['share_param']
         self.victim_share_param = algo_args["victim"]['share_param']
+        
+        self.env_belief = algo_args["train"].get("env_belief", False)
+        self.env_belief_matter = algo_args["train"].get("env_belief_matter", False)
+        self.actor_divide_conquer = algo_args["train"].get("actor_divide_conquer", False)
+        self.actor_use_dt2gs = algo_args["train"].get("actor_use_dt2gs", False)
+        if self.actor_use_dt2gs:
+            self.actor_skills_num = algo_args["train"].get("actor_skills_num", 4)
+        if self.actor_divide_conquer:
+            assert algo_args["train"].get("actor_use_updet", False), \
+                "When 'actor_divide_conquer' is set to <True>, 'actor_use_updet' must be set to <True> also!"
+        if self.env_belief:
+            env_prior_path = algo_args["train"].get("env_prior_path", "./env_prior.npy")
+            if os.path.exists(env_prior_path):
+                self.env_prior = np.load(env_prior_path)
+                self.env_belief_dim = len(self.env_prior)
+                algo_args["train"]["env_belief_dim"] = self.env_belief_dim
+            else:
+                import warnings
+                warnings.warn(f"Env prior path {env_prior_path} does not exist! Switch param 'env_prior' to False.")
+                self.env_belief = False
+                algo_args["train"]["env_belief"] = False
 
         set_seed(algo_args["train"])
         self.device = init_device(algo_args["train"])
@@ -126,12 +147,21 @@ class BaseRunner:
                 else None
             )
         self.num_agents = self.envs.n_agents
+        self.num_enemies = self.envs.n_enemies
+        algo_args["train"]["n_agents"] = self.num_agents
+        algo_args["train"]["n_enemies"] = self.num_enemies
         self.num_adv_agents = len(algo_args["train"]["adv_agent_ids"])
         self.action_type = self.envs.action_space[0].__class__.__name__
 
         print("share_observation_space: ", self.envs.share_observation_space)
         print("observation_space: ", self.envs.observation_space)
         print("action_space: ", self.envs.action_space, self.action_type)
+        
+        if self.env_belief and self.env_belief_matter:
+            self.eval_adv_env_belief_ground_truth = np.zeros((self.n_eval_rollout_threads, self.num_adv_agents, self.env_belief_dim), dtype=np.float32)
+            self.eval_adv_env_belief_ground_truth[:] = self.env_prior
+            self.adv_env_belief_ground_truth = np.zeros((self.n_rollout_threads, self.num_adv_agents, self.env_belief_dim), dtype=np.float32)
+            self.adv_env_belief_ground_truth[:] = self.env_prior
 
         # algorithm
         if self.share_param:
@@ -143,10 +173,6 @@ class BaseRunner:
                     self.envs.action_space[agent_id] == self.envs.action_space[0]
                 ), "Agents have heterogeneous action spaces, parameter sharing is not valid."
 
-        # 只针对4m_vs_3m/6m/11m三张图，其余部分需要手动修改
-        map_name = self.env_args["map_name"]
-        ally_num = 3 if map_name == "4m_vs_3m" else (8 if map_name == "9m_vs_8m" else 5)
-
         self.victims = []
         if self.victim_share_param:
             agent = ALGO_REGISTRY[args["victim"]].create_agent(
@@ -154,8 +180,6 @@ class BaseRunner:
                 self.envs.observation_space[0],
                 self.envs.action_space[0],
                 device=self.device,
-                ally_num=ally_num,
-                agent_type="adv_victim"
             )
             agent.prep_rollout()
             for agent_id in range(self.num_agents):
@@ -263,7 +287,9 @@ class BaseRunner:
                 break
 
     @torch.no_grad()
-    def eval_adv(self):
+    def eval_adv(self, few_shot_learning_mode=False):
+        if few_shot_learning_mode:
+            assert self.env_belief and self.env_belief_matter
         """Evaluate the model. All algorithms should fit this evaluation pipeline."""
         self.algo.prep_rollout()
 
@@ -271,9 +297,23 @@ class BaseRunner:
         eval_episode = 0
 
         eval_obs, eval_share_obs, eval_available_actions = self.eval_envs.reset()
+        last_obs = eval_obs
+        last_reward = np.zeros((self.n_eval_rollout_threads, self.num_agents, 1))
 
         eval_rnn_states = np.zeros((self.n_eval_rollout_threads, self.num_agents, self.victim_recurrent_n, self.victim_rnn_hidden_size), dtype=np.float32)
         eval_adv_rnn_states = np.zeros((self.n_eval_rollout_threads, self.num_adv_agents, self.recurrent_n, self.rnn_hidden_size), dtype=np.float32)
+        if self.env_belief:
+            eval_adv_rnn_states_belief = np.zeros((self.n_eval_rollout_threads, self.num_adv_agents, self.recurrent_n, self.rnn_hidden_size), dtype=np.float32)
+            eval_adv_env_belief = np.zeros((self.n_eval_rollout_threads, self.num_adv_agents, self.env_belief_dim), dtype=np.float32)
+            eval_adv_env_belief[:] = self.env_prior
+            eval_bayesian_update = np.zeros((self.n_eval_rollout_threads), dtype=bool)
+            if few_shot_learning_mode:
+                eval_adv_env_belief_list = [self.env_prior.copy() for _ in range(self.n_eval_rollout_threads * self.num_adv_agents)]
+        else:
+            eval_adv_env_belief = None
+        if self.actor_use_dt2gs:
+            eval_adv_previous_skills = np.zeros((self.n_eval_rollout_threads, self.num_adv_agents, self.actor_skills_num))
+        
         eval_masks = np.ones((self.n_eval_rollout_threads, self.num_agents, 1), dtype=np.float32)
         
         # shape: [n_threads, n_agents]
@@ -297,14 +337,36 @@ class BaseRunner:
 
             eval_adv_actions_collector = []
             for agent_id in range(self.num_adv_agents):
+                if self.env_belief and (not self.env_belief_matter or few_shot_learning_mode):
+                    env_belief, rnn_state_belief = self.agents[agent_id].forward_belief(
+                        gather(eval_obs, adv_agent_ids, axis=1)[:, agent_id],
+                        gather(last_reward, adv_agent_ids, axis=1)[:, agent_id],
+                        gather(last_obs, adv_agent_ids, axis=1)[:, agent_id],
+                        eval_adv_env_belief[:, agent_id],
+                        eval_adv_rnn_states_belief[:, agent_id],
+                        gather(eval_masks, adv_agent_ids, axis=1)[:, agent_id],
+                    )
+                    eval_adv_env_belief[eval_bayesian_update == True, agent_id] = _t2n(env_belief)[eval_bayesian_update == True]
+                    eval_adv_rnn_states_belief[eval_bayesian_update == True, agent_id] = _t2n(rnn_state_belief)[eval_bayesian_update == True]
+                    if few_shot_learning_mode:
+                        eval_adv_env_belief_list.extend([eval_adv_env_belief[i, agent_id].copy() 
+                                                           for i in range(self.n_eval_rollout_threads) if eval_bayesian_update[i]])
                 eval_adv_actions, temp_adv_rnn_state = self.agents[agent_id].perform(
                     gather(eval_obs, adv_agent_ids, axis=1)[:, agent_id],
                     eval_adv_rnn_states[:, agent_id],
                     gather(eval_masks, adv_agent_ids, axis=1)[:, agent_id],
                     gather(eval_available_actions, adv_agent_ids, axis=1)[:, agent_id]
                     if eval_available_actions[0] is not None else None,
+                    env_belief = (self.eval_adv_env_belief_ground_truth[:, agent_id] if self.env_belief_matter 
+                                  else eval_adv_env_belief[:, agent_id]) if self.env_belief else None,
+                    previous_skills = eval_adv_previous_skills[:, agent_id] if self.actor_use_dt2gs else None,                    
                     deterministic=True,
                 )
+                if self.actor_use_dt2gs:
+                    eval_adv_actions, adv_skills = eval_adv_actions
+                    eval_adv_previous_skills[:, agent_id] = _t2n(adv_skills)
+                if self.actor_divide_conquer:
+                    eval_adv_actions, _ = eval_adv_actions
                 eval_adv_rnn_states[:, agent_id] = _t2n(temp_adv_rnn_state)
                 eval_adv_actions_collector.append(_t2n(eval_adv_actions))
             eval_adv_actions = np.array(eval_adv_actions_collector).transpose(1, 0, 2)
@@ -312,7 +374,11 @@ class BaseRunner:
             perturb_mask = self.perturb_timesteps[current_timesteps]
             eval_actions[perturb_mask] = scatter(eval_actions[perturb_mask], adv_agent_ids[perturb_mask], eval_adv_actions[perturb_mask], axis=1)
 
+            last_obs = eval_obs
             eval_obs, eval_share_obs, eval_rewards, eval_dones, eval_infos, eval_available_actions = self.eval_envs.step(eval_actions)
+            last_reward = self.get_adv_rewards({"rewards": eval_rewards, "infos": eval_infos})
+            if self.env_belief:
+                eval_bayesian_update[:] = True
             eval_data = (eval_obs, eval_share_obs, eval_rewards, eval_dones, eval_infos, eval_available_actions)
             
             self.logger.eval_per_step(eval_data)  # logger callback at each step of evaluation
@@ -320,6 +386,15 @@ class BaseRunner:
             eval_dones_env = np.all(eval_dones, axis=1)
 
             eval_rnn_states[eval_dones_env == True] = 0
+            if self.actor_use_dt2gs:
+                eval_adv_previous_skills[eval_dones_env == True] = 0
+            if self.env_belief:
+                eval_adv_rnn_states_belief[eval_dones_env == True] = 0
+                eval_bayesian_update[eval_dones_env == True] = False
+                eval_adv_env_belief[eval_dones_env == True, :] = self.env_prior
+                if few_shot_learning_mode:
+                    eval_adv_env_belief_list.extend([self.env_prior.copy() for i in range(self.n_eval_rollout_threads * self.num_adv_agents) 
+                                                       if eval_bayesian_update[i % self.n_eval_rollout_threads]])
 
             eval_masks = np.ones((self.n_eval_rollout_threads, self.num_agents, 1), dtype=np.float32)
             eval_masks[eval_dones_env == True] = 0
@@ -333,8 +408,13 @@ class BaseRunner:
                     self.logger.eval_thread_done(eval_i)  # logger callback when an episode is done
                     adv_agent_ids[eval_i] = self.get_certain_adv_ids()
 
-            if eval_episode >= self.algo_args["train"]["eval_episodes"]:
-                self.logger.eval_log_adv(eval_episode)  # logger callback at the end of evaluation
+            if eval_episode >= (self.algo_args["train"]["eval_episodes"] if not few_shot_learning_mode 
+                                else self.algo_args["train"]["matter_transfer_few_shot_episodes"]):
+                self.logger.eval_log(eval_episode)  # logger callback at the end of evaluation
+                if few_shot_learning_mode:
+                    self.env_prior = np.stack(eval_adv_env_belief_list, axis=0).mean(axis=0)
+                    self.eval_adv_env_belief_ground_truth[:] = self.env_prior
+                    self.adv_env_belief_ground_truth[:] = self.env_prior
                 break
 
     @torch.no_grad()

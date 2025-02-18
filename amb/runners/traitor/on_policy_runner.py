@@ -39,6 +39,16 @@ class OnPolicyRunner(BaseRunner):
                     "active_masks": {"vshape": (1,), "offset": 1, "init_value": 1},
                     "bad_masks": {"vshape": (1,), "offset": 1, "init_value": 1},
                 }
+                if self.env_belief:
+                    self.env_belief_dim = self.algo_args["train"]["env_belief_dim"]
+                    scheme["rnn_states_belief"] = {"vshape": (self.recurrent_n, self.rnn_hidden_size), "offset": 1, "extra": ["rnn_state", "sample_next"]}
+                    scheme["belief"] = {"vshape": (self.env_belief_dim,), "offset": 0}
+                    scheme["obs"]["extra"] = ["sample_next"]
+                    scheme["masks"]["extra"] = ["sample_next"]
+                if self.actor_divide_conquer:
+                    scheme["chosens"] = {"vshape": (self.num_agents + self.num_enemies - 1,), "offset": 0}
+                if self.actor_use_dt2gs:
+                    scheme["previous_skills"] = {"vshape": (self.actor_skills_num,), "offset": 1}
                 if self.action_type == "Discrete":
                     scheme["available_actions"] = {"vshape": (self.envs.action_space[agent_id].n,), "offset": 1, "init_value": 1}
                 self.buffers.append(EpisodeBuffer(algo_args["train"], self.n_rollout_threads, scheme))
@@ -68,6 +78,12 @@ class OnPolicyRunner(BaseRunner):
 
     def run(self):
         """Run the training (or rendering) pipeline."""
+        if self.algo_args["train"]['matter_transfer_test']:
+            self.logger.init()
+            self.logger.episode_init(0)
+            print("Searching for the proper factors in transfer test of MATTER...")
+            self.eval_adv(few_shot_learning_mode=True)
+            
         if "eval_only" in self.algo_args['train'] and self.algo_args['train']['eval_only']:
             print("[[EVAL MODE]]")
             self.logger.init()  # logger callback at the beginning of training
@@ -91,7 +107,9 @@ class OnPolicyRunner(BaseRunner):
         obs, share_obs, available_actions, adv_agent_ids = self.init_batch()
         rnn_states = np.zeros((self.n_rollout_threads, self.num_agents, self.victim_recurrent_n, self.victim_rnn_hidden_size), dtype=np.float32)
         masks = np.ones((self.n_rollout_threads, self.num_agents, 1), dtype=np.float32)
-        
+        if self.env_belief:
+            self.bayesian_update = np.zeros((self.n_rollout_threads), dtype=bool)
+
         episodes = int(self.algo_args['train']['num_env_steps']) // self.algo_args['train']['episode_length'] // self.algo_args['train']['n_rollout_threads']
         
         for episode in range(1, episodes + 1):
@@ -104,7 +122,15 @@ class OnPolicyRunner(BaseRunner):
 
             for step in range(self.algo_args['train']['episode_length']):
                 # Sample actions from actors and values from critics
-                adv_values, adv_actions, adv_action_log_probs, adv_rnn_states, adv_rnn_states_critic = self.collect(step)
+                if self.env_belief:
+                    adv_values, adv_actions, adv_action_log_probs, adv_rnn_states, adv_rnn_states_critic, adv_beliefs, adv_rnn_states_belief = self.collect(step)
+                else:
+                    adv_values, adv_actions, adv_action_log_probs, adv_rnn_states, adv_rnn_states_critic = self.collect(step)
+
+                if self.actor_use_dt2gs:
+                    adv_actions, adv_skills = adv_actions
+                if self.actor_divide_conquer:
+                    adv_actions, adv_chosens = adv_actions
 
                 actions_collector = []
                 for agent_id in range(self.num_agents):
@@ -124,6 +150,8 @@ class OnPolicyRunner(BaseRunner):
                 
                 # actions: (n_threads, n_agents, action_dim)
                 obs, share_obs, rewards, dones, infos, available_actions = self.envs.step(actions)
+                if self.env_belief:
+                    self.bayesian_update[:] = True
 
                 filled = np.ones((self.n_rollout_threads, self.num_adv_agents), dtype=np.float32)
 
@@ -133,6 +161,12 @@ class OnPolicyRunner(BaseRunner):
                     "value_preds": adv_values, "actions": adv_actions, "action_log_probs": adv_action_log_probs, 
                     "rnn_states_actor": adv_rnn_states, "rnn_states_critic": adv_rnn_states_critic, "filled": filled
                 }
+                if self.actor_divide_conquer:
+                    data.update({"chosens": adv_chosens})
+                if self.actor_use_dt2gs:
+                    data.update({"previous_skills": adv_skills})
+                if self.env_belief:
+                    data.update({"belief": adv_beliefs, "rnn_states_belief": adv_rnn_states_belief})
                 if "available_actions" in self.buffers[0].data:
                     data.update({"available_actions": gather(available_actions, adv_agent_ids, 1)})
 
@@ -186,15 +220,49 @@ class OnPolicyRunner(BaseRunner):
         rnn_state_collector = []
         value_collector = []
         rnn_state_critic_collector = []
+        if self.env_belief:
+            belief_collector = []
+            rnn_state_belief_collector = []
+        if self.actor_divide_conquer:
+            chosen_collector = []
+        if self.actor_use_dt2gs:
+            skills_collector = []
 
         for agent_id in range(self.num_adv_agents):
+            if self.env_belief:
+                belief, rnn_state_belief = self.agents[agent_id].forward_belief(
+                    self.buffers[agent_id].data["obs"][:, step],
+                    self.buffers[agent_id].data["rewards"][:, step - 1],
+                    self.buffers[agent_id].data["obs"][:, step - 1],
+                    self.buffers[agent_id].data["belief"][:, step - 1],
+                    self.buffers[agent_id].data["rnn_states_belief"][:, step],
+                    self.buffers[agent_id].data["masks"][:, step],
+                )
+                belief_np = _t2n(belief)
+                belief_np[self.bayesian_update == False, :] = self.env_prior
+                belief_collector.append(belief_np)
+                rnn_state_belief_np = self.buffers[agent_id].data["rnn_states_belief"][:, step]
+                rnn_state_belief_np[self.bayesian_update == True] = _t2n(rnn_state_belief)[self.bayesian_update == True]
+                rnn_state_belief_collector.append(rnn_state_belief_np)
+            else:
+                belief_np = None
+                
             action, action_log_prob, rnn_state = self.agents[agent_id].collect(
                 self.buffers[agent_id].data["obs"][:, step],
                 self.buffers[agent_id].data["rnn_states_actor"][:, step],
                 self.buffers[agent_id].data["masks"][:, step],
                 self.buffers[agent_id].data["available_actions"][:, step]
-                if "available_actions" in self.buffers[agent_id].data else None
+                if "available_actions" in self.buffers[agent_id].data else None,
+                env_belief = self.adv_env_belief_ground_truth[:, agent_id] if (self.env_belief and self.env_belief_matter) else belief_np,
+                previous_skills = self.buffers[agent_id].data["previous_skills"][:, step]
+                if self.actor_use_dt2gs else None
             )
+            if self.actor_use_dt2gs:
+                action, skill = action
+                skills_collector.append(_t2n(skill))
+            if self.actor_divide_conquer:
+                action, chosen = action
+                chosen_collector.append(_t2n(chosen))
             value, rnn_state_critic = self.critic(
                 self.buffers[agent_id].data["share_obs"][:, step],
                 self.buffers[agent_id].data["rnn_states_critic"][:, step],
@@ -208,12 +276,23 @@ class OnPolicyRunner(BaseRunner):
             rnn_state_critic_collector.append(_t2n(rnn_state_critic))
 
         actions = np.stack(action_collector, axis=1)
+        if self.actor_divide_conquer:
+            chosens = np.stack(chosen_collector, axis=1)
+            actions = (actions, chosens)
+        if self.actor_use_dt2gs:
+            skills = np.stack(skills_collector, axis=1)
+            actions = (actions, skills)
         action_log_probs = np.stack(action_log_prob_collector, axis=1)
         rnn_states = np.stack(rnn_state_collector, axis=1)
         values = np.stack(value_collector, axis=1)
         rnn_states_critic = np.stack(rnn_state_critic_collector, axis=1)
 
-        return values, actions, action_log_probs, rnn_states, rnn_states_critic
+        if self.env_belief:
+            beliefs = np.stack(belief_collector, axis=1)
+            rnn_states_belief = np.stack(rnn_state_belief_collector, axis=1) 
+            return values, actions, action_log_probs, rnn_states, rnn_states_critic, beliefs, rnn_states_belief
+        else:
+            return values, actions, action_log_probs, rnn_states, rnn_states_critic
     
     def insert(self, data, step):
         """Insert data into buffer.
@@ -223,6 +302,11 @@ class OnPolicyRunner(BaseRunner):
         dones_env = np.all(data["dones"], axis=1)
         data["rnn_states_actor"][dones_env==True] = 0
         data["rnn_states_critic"][dones_env==True] = 0
+        if self.env_belief:
+            self.bayesian_update[dones_env == True] = False
+            data["rnn_states_belief"][dones_env==True] = 0
+        if self.actor_use_dt2gs:
+            data["previous_skills"][dones_env==True] = 0
 
         data["masks"] = np.ones((self.n_rollout_threads, self.num_agents, 1), dtype=np.float32)
         data["masks"][dones_env==True] = 0
@@ -270,6 +354,18 @@ class OnPolicyRunner(BaseRunner):
         for agent_id in range(self.num_adv_agents):
             self.buffers[agent_id]["advantages"][:] = advantages[:, :, agent_id].copy()
 
+        # update belief
+        belief_train_infos = []
+        if self.env_belief:
+            if self.share_param:
+                belief_train_info = self.algo.share_param_train_belief(self.buffers)
+                for _ in range(self.num_adv_agents):
+                    belief_train_infos.append(belief_train_info)
+            else:
+                for agent_id in range(self.num_adv_agents):
+                    belief_train_info = self.algo.train_belief(self.buffers[agent_id], agent_id)
+                    belief_train_infos.append(belief_train_info)
+        
         # update actors
         actor_train_infos = []
         if self.share_param:
@@ -280,6 +376,9 @@ class OnPolicyRunner(BaseRunner):
             for agent_id in range(self.num_adv_agents):
                 actor_train_info = self.algo.train_actor(self.buffers[agent_id], agent_id)
                 actor_train_infos.append(actor_train_info)
+        if self.env_belief:
+            for agent_id in range(self.num_adv_agents):
+                actor_train_infos[agent_id].update(belief_train_infos[agent_id])
 
         # update critic
         critic_train_info = self.algo.train_critic(self.buffers, self.value_normalizer)
