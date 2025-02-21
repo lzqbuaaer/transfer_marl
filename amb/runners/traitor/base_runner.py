@@ -410,7 +410,7 @@ class BaseRunner:
 
             if eval_episode >= (self.algo_args["train"]["eval_episodes"] if not few_shot_learning_mode 
                                 else self.algo_args["train"]["matter_transfer_few_shot_episodes"]):
-                self.logger.eval_log(eval_episode)  # logger callback at the end of evaluation
+                self.logger.eval_log_adv(eval_episode)  # logger callback at the end of evaluation
                 if few_shot_learning_mode:
                     self.env_prior = np.stack(eval_adv_env_belief_list, axis=0).mean(axis=0)
                     self.eval_adv_env_belief_ground_truth[:] = self.env_prior
