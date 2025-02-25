@@ -85,6 +85,12 @@ def main():
         default="",
         help="If set, load existing victim config file and checkpoint file instead of reading from yaml config file.",
     )
+    parser.add_argument(
+        "--multi_map_list", 
+        type=str,
+        nargs='*',
+        help="If set, the observation spaces of these maps will be aligned."
+    )
     args, unparsed_args = parser.parse_known_args()
 
     def process(arg):
@@ -119,21 +125,21 @@ def main():
             algo_args = get_one_yaml_args(args["algo"])
         elif args["run"] == "perturbation" or args["run"] == "traitor":
             algo_args = get_one_yaml_args(args["algo"] + "_traitor")
+        env_args = get_one_yaml_args(args["env"], type="env")
 
         if args["load_victim"] != "":
             with open(os.path.join(args["load_victim"], "config.json"), encoding='utf-8') as file:
                 victim_config = json.load(file)
             args["victim"] = victim_config["main_args"]["algo"]
-            args["env"] = victim_config["main_args"]["env"]
             victim_config["algo_args"]["train"]["model_dir"] = os.path.join(args["load_victim"], "models")
 
             victim_args = victim_config["algo_args"]["train"]
-            env_args = victim_config["env_args"]
         else:
             victim_args = {}
             if args["run"] == "perturbation" or args["run"] == "traitor":
                 victim_args = get_one_yaml_args(args["victim"])
-            env_args = get_one_yaml_args(args["env"], type="env")
+    if args["multi_map_list"] is not None:
+        env_args["multi_map_list"] = args["multi_map_list"]
             
     update_args(unparsed_dict, algo=algo_args, env=env_args, victim=victim_args)  # update args from command line
     algo_args = {"train": algo_args, "victim": victim_args}

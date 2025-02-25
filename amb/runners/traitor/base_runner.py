@@ -156,6 +156,13 @@ class BaseRunner:
         print("share_observation_space: ", self.envs.share_observation_space)
         print("observation_space: ", self.envs.observation_space)
         print("action_space: ", self.envs.action_space, self.action_type)
+        obs_own_feat, obs_enemy_feat, obs_ally_feat = self.envs.obs_own_feat, self.envs.obs_enemy_feat, self.envs.obs_ally_feat
+        print("obs_own_feat: ", obs_own_feat)
+        print("obs_enemy_feat: ", obs_enemy_feat)
+        print("obs_ally_feat: ", obs_ally_feat)
+        algo_args["train"]["obs_own_feat"] = obs_own_feat
+        algo_args["train"]["obs_enemy_feat"] = obs_enemy_feat
+        algo_args["train"]["obs_ally_feat"] = obs_ally_feat
         
         if self.env_belief and self.env_belief_matter:
             self.eval_adv_env_belief_ground_truth = np.zeros((self.n_eval_rollout_threads, self.num_adv_agents, self.env_belief_dim), dtype=np.float32)

@@ -138,6 +138,3 @@ actor_use_dt2gs: False
 actor_skills_num: 4
 obs_transformer_heads: 3
 obs_transformer_depth: 2
-obs_own_feat: 9
-obs_enemy_feat: 5
-obs_ally_feat: 5

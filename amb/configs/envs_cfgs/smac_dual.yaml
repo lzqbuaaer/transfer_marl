@@ -3,3 +3,6 @@ state_type: FP # choose from FP (Feature Pruned) and EP (Environment Provided)
 reverse_team: True
 replay_dir: ""
 replay_prefix: ""
+
+multi_map_alignment: False
+multi_map_list: []

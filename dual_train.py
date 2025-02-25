@@ -86,6 +86,12 @@ def main():
         default="",
         help="If set, load existing angel config file and checkpoint file instead of reading from yaml config file.",
     )
+    parser.add_argument(
+        "--multi_map_list", 
+        type=str,
+        nargs='*',
+        help="If set, the observation spaces of these maps will be aligned."
+    )
     args, unparsed_args = parser.parse_known_args()
 
     def process(arg):
@@ -164,6 +170,8 @@ def main():
                 demon_args = demon_config["algo_args"]["demon"]
         else:
             demon_args = get_one_yaml_args(args["demon"])
+    if args["multi_map_list"] is not None:
+        env_args["multi_map_list"] = args["multi_map_list"]
             
     update_args(unparsed_dict, angel=angel_args, env=env_args, demon=demon_args, victim=victim_args)  # update args from command line
     algo_args = {"angel": angel_args, "demon": demon_args, "victim": victim_args}

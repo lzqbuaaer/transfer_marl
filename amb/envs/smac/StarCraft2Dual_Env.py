@@ -7,6 +7,8 @@ from multiprocessing.connection import wait
 from .StarCraft2_Env import StarCraft2Env
 from .multiagentenv import MultiAgentEnv
 
+from pysc2.lib import protocol
+
 
 class CloudpickleWrapper(object):
     """
@@ -49,7 +51,7 @@ def process_env(env: StarCraft2Env, pipe):
                 ret = env.get_env_info()
             elif command[0] == "get_stats":
                 ret = env.get_stats()
-        except Exception as e:
+        except (protocol.ProtocolError, protocol.ConnectionError) as e:
             import traceback
             traceback.print_exc()
             pipe.send(f"Error: {e}")
@@ -63,9 +65,21 @@ class StarCraft2DualEnv(MultiAgentEnv):
         self.r = int(args["reverse_team"])
         del args["reverse_team"]
         self.args = args
+        self.multi_map_alignment = args.get("multi_map_alignment", False)
         self.kwargs = kwargs
-        self.host_env = StarCraft2Env(args, **kwargs, host=True, ports=ports)
-        self.client_env = StarCraft2Env(args, **kwargs, host=False, ports=ports)
+        
+        self.host_args, self.client_args = self.args.copy(), self.args.copy()
+        if self.multi_map_alignment and (not self.r):
+            self.host_args["multi_map_alignment"] = True
+            self.client_args["multi_map_alignment"] = False
+        elif self.multi_map_alignment:
+            self.host_args["multi_map_alignment"] = False
+            self.client_args["multi_map_alignment"] = True
+        else:
+            self.host_args["multi_map_alignment"] = False
+            self.client_args["multi_map_alignment"] = False
+        self.host_env = StarCraft2Env(self.host_args, **kwargs, host=True, ports=ports)
+        self.client_env = StarCraft2Env(self.client_args, **kwargs, host=False, ports=ports)
         self.host_pipe, self.host_child_pipe = Pipe()
         self.client_pipe, self.client_child_pipe = Pipe()
         self.p_host_env = Process(target=process_env, args=(self.host_env, self.host_child_pipe))
@@ -81,6 +95,9 @@ class StarCraft2DualEnv(MultiAgentEnv):
         self.observation_space = [data[0][self.r], data[0][1-self.r]]
         self.share_observation_space = [data[1][self.r], data[1][1-self.r]]
         self.action_space = [data[2][self.r], data[2][1-self.r]]
+        self.obs_own_feat = [data[4][self.r], data[4][1-self.r]]
+        self.obs_enemy_feat = [data[5][self.r], data[5][1-self.r]]
+        self.obs_ally_feat = [data[6][self.r], data[6][1-self.r]]
 
         self.n_angels = data[3][self.r]
         self.n_demons = data[3][1-self.r]
@@ -95,8 +112,8 @@ class StarCraft2DualEnv(MultiAgentEnv):
         self.host_pipe.close()
         self.client_pipe.close()
         ports = [portpicker.pick_unused_port() for _ in range(4)]
-        self.host_env = StarCraft2Env(self.args, **self.kwargs, host=True, ports=ports)
-        self.client_env = StarCraft2Env(self.args, **self.kwargs, host=False, ports=ports)
+        self.host_env = StarCraft2Env(self.host_args, **self.kwargs, host=True, ports=ports)
+        self.client_env = StarCraft2Env(self.client_args, **self.kwargs, host=False, ports=ports)
         self.host_pipe, self.host_child_pipe = Pipe()
         self.client_pipe, self.client_child_pipe = Pipe()
         self.p_host_env = Process(target=process_env, args=(self.host_env, self.host_child_pipe))

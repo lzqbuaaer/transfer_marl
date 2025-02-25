@@ -117,6 +117,13 @@ class BaseRunner:
         print("share_observation_space: ", self.envs.share_observation_space)
         print("observation_space: ", self.envs.observation_space)
         print("action_space: ", self.envs.action_space, self.action_type)
+        obs_own_feat, obs_enemy_feat, obs_ally_feat = self.envs.obs_own_feat, self.envs.obs_enemy_feat, self.envs.obs_ally_feat
+        print("obs_own_feat: ", obs_own_feat)
+        print("obs_enemy_feat: ", obs_enemy_feat)
+        print("obs_ally_feat: ", obs_ally_feat)
+        algo_args["angel"]["obs_own_feat"] = obs_own_feat[0]
+        algo_args["angel"]["obs_enemy_feat"] = obs_enemy_feat[0]
+        algo_args["angel"]["obs_ally_feat"] = obs_ally_feat[0]
 
         if self.algo_args["angel"]['use_render'] is False:
             self.logger = LOGGER_REGISTRY[args["env"]](

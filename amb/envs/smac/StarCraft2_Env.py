@@ -28,6 +28,7 @@ import yaml
 
 import random
 from gym.spaces import Discrete, Box
+from .smac_multi_map_utils import get_alignment_shield_bits, get_unit_types_universe, UnitType
 
 races = {
     "R": sc_common.Random,
@@ -210,6 +211,10 @@ class StarCraft2Env(MultiAgentEnv):
         self.map_name = args["map_name"]
         self.replay_dir = args.get("replay_dir", "")
         self.replay_prefix = args.get("replay_prefix", "")
+        self.multi_map_alignment = args.get("multi_map_alignment", False)
+        self.multi_map_list = args.get("multi_map_list", [self.map_name])
+        if self.map_name not in self.multi_map_list:
+            self.multi_map_list.append(self.map_name)
         self.add_local_obs = state_config["add_local_obs"]
         self.add_move_state = state_config["add_move_state"]
         self.add_visible_state = state_config["add_visible_state"]
@@ -295,6 +300,25 @@ class StarCraft2Env(MultiAgentEnv):
             self.shield_bits_ally = 1 if self._bot_race == "P" else 0
             self.shield_bits_enemy = 1 if self._agent_race == "P" else 0
         self.unit_type_bits = map_params["unit_type_bits"]
+        self.ally_id_type_map = {}
+        if self.multi_map_alignment:
+            self.shield_bits_ally_alignment, self.shield_bits_enemy_alignment \
+                = get_alignment_shield_bits(self.multi_map_list, self.host)
+            self.ally_unit_types_universe, self.enemy_unit_types_universe \
+                = get_unit_types_universe(self.multi_map_list, self.host)
+            self.unit_type_bits = max(len(self.ally_unit_types_universe), len(self.enemy_unit_types_universe))
+            if self.unit_type_bits <= 1:
+                self.unit_type_bits = 0
+            # unit_type: class UnitType
+            self.ally_type_bit_map_alignment = {unit_type: index \
+                for index, unit_type in enumerate(sorted(self.ally_unit_types_universe))}
+            # unit_type: 
+            # Dual: class UnitType; Single: default SC2 unit types
+            self.enemy_type_bit_map_alignment = {unit_type: index \
+                for index, unit_type in enumerate(sorted(self.enemy_unit_types_universe))}
+        else:
+            self.shield_bits_ally_alignment, self.shield_bits_enemy_alignment \
+                = self.shield_bits_ally, self.shield_bits_enemy
         self.map_type = map_params["map_type"]
 
         self.max_reward = self.n_enemies * self.reward_death_value + self.reward_win
@@ -357,6 +381,9 @@ class StarCraft2Env(MultiAgentEnv):
                 ),
                 dtype=np.float32,
             )
+        self.obs_own_feat = self.get_obs_own_feats_size() + self.get_obs_move_feats_size()
+        self.obs_enemy_feat = self.get_obs_enemy_feats_size()[1]
+        self.obs_ally_feat = self.get_obs_ally_feats_size()[1]
 
     def _launch(self):
         """Launch the StarCraft II game."""
@@ -1212,12 +1239,13 @@ class StarCraft2Env(MultiAgentEnv):
                             e_unit.health / e_unit.health_max
                         )  # health
                         ind += 1
-                        if self.shield_bits_enemy > 0:
-                            max_shield = self.unit_max_shield(e_unit)
-                            enemy_feats[e_id, ind] = (
-                                e_unit.shield / max_shield
-                            )  # shield
-                            ind += 1
+                        if self.shield_bits_enemy_alignment > 0:
+                            if self.shield_bits_enemy > 0:
+                                max_shield = self.unit_max_shield(e_unit)
+                                enemy_feats[e_id, ind] = (
+                                    e_unit.shield / max_shield
+                                )  # shield
+                            ind += self.shield_bits_enemy_alignment
 
                     if self.unit_type_bits > 0:
                         type_id = self.get_unit_type_id(e_unit, False)
@@ -1243,10 +1271,11 @@ class StarCraft2Env(MultiAgentEnv):
                             al_unit.health / al_unit.health_max
                         )  # health
                         ind += 1
-                        if self.shield_bits_ally > 0:
-                            max_shield = self.unit_max_shield(al_unit)
-                            ally_feats[i, ind] = al_unit.shield / max_shield  # shield
-                            ind += 1
+                        if self.shield_bits_ally_alignment > 0:
+                            if self.shield_bits_ally > 0:
+                                max_shield = self.unit_max_shield(al_unit)
+                                ally_feats[i, ind] = al_unit.shield / max_shield  # shield
+                            ind += self.shield_bits_ally_alignment
 
                     if self.unit_type_bits > 0:
                         type_id = self.get_unit_type_id(al_unit, True)
@@ -1266,10 +1295,11 @@ class StarCraft2Env(MultiAgentEnv):
             if self.obs_own_health:
                 own_feats[ind] = unit.health / unit.health_max
                 ind += 1
-                if self.shield_bits_ally > 0:
-                    max_shield = self.unit_max_shield(unit)
-                    own_feats[ind] = unit.shield / max_shield
-                    ind += 1
+                if self.shield_bits_ally_alignment > 0:
+                    if self.shield_bits_ally > 0:
+                        max_shield = self.unit_max_shield(unit)
+                        own_feats[ind] = unit.shield / max_shield
+                    ind += self.shield_bits_ally_alignment
 
             if self.unit_type_bits > 0:
                 type_id = self.get_unit_type_id(unit, True)
@@ -1887,7 +1917,7 @@ class StarCraft2Env(MultiAgentEnv):
         nf_en = 4 + self.unit_type_bits
 
         if self.obs_all_health:
-            nf_en += 1 + self.shield_bits_enemy
+            nf_en += 1 + (self.shield_bits_enemy_alignment if self.multi_map_alignment else self.shield_bits_enemy)
 
         return self.n_enemies, nf_en
 
@@ -1912,7 +1942,7 @@ class StarCraft2Env(MultiAgentEnv):
         nf_al = 4 + self.unit_type_bits
 
         if self.obs_all_health:
-            nf_al += 1 + self.shield_bits_ally
+            nf_al += 1 + (self.shield_bits_ally_alignment if self.multi_map_alignment else self.shield_bits_ally)
 
         if self.obs_last_action:
             nf_al += self.n_actions
@@ -1940,7 +1970,7 @@ class StarCraft2Env(MultiAgentEnv):
         """Returns the size of the vector containing the agents' own features."""
         own_feats = 4 + self.unit_type_bits
         if self.obs_own_health:
-            own_feats += 1 + self.shield_bits_ally
+            own_feats += 1 + (self.shield_bits_ally_alignment if self.multi_map_alignment else self.shield_bits_ally)
 
         if self.obs_last_action:
             own_feats += self.n_actions
@@ -2208,31 +2238,41 @@ class StarCraft2Env(MultiAgentEnv):
     def get_unit_type_id(self, unit, ally):
         """Returns the ID of unit type in the given scenario."""
         if ally or self.ports is not None:  # use new SC2 unit types
-            type_id = unit.unit_type - self._min_unit_type
+            if not self.multi_map_alignment:
+                type_id = unit.unit_type - self._min_unit_type
+            elif ally:
+                type_id = self.ally_type_bit_map_alignment[self.ally_id_type_map[unit.unit_type]]
+            else:   # Dual
+                type_id = self.enemy_type_bit_map_alignment[self.ally_id_type_map[unit.unit_type]]
         else:  # use default SC2 unit types
-            if self.map_type == "stalkers_and_zealots":
-                # id(Stalker) = 74, id(Zealot) = 73
-                type_id = unit.unit_type - 73
-            elif self.map_type == "colossi_stalkers_zealots":
-                # id(Stalker) = 74, id(Zealot) = 73, id(Colossus) = 4
-                if unit.unit_type == 4:
-                    type_id = 0
-                elif unit.unit_type == 74:
-                    type_id = 1
+            if not self.multi_map_alignment:
+                if self.map_type == "stalkers_and_zealots":
+                    # id(Stalker) = 74, id(Zealot) = 73
+                    type_id = unit.unit_type - 73
+                elif self.map_type == "colossi_stalkers_zealots":
+                    # id(Stalker) = 74, id(Zealot) = 73, id(Colossus) = 4
+                    if unit.unit_type == 4:
+                        type_id = 0
+                    elif unit.unit_type == 74:
+                        type_id = 1
+                    else:
+                        type_id = 2
+                elif self.map_type == "bane":
+                    if unit.unit_type == 9:
+                        type_id = 0
+                    else:
+                        type_id = 1
+                elif self.map_type == "MMM":
+                    if unit.unit_type == 51:
+                        type_id = 0
+                    elif unit.unit_type == 48:
+                        type_id = 1
+                    else:
+                        type_id = 2
                 else:
-                    type_id = 2
-            elif self.map_type == "bane":
-                if unit.unit_type == 9:
                     type_id = 0
-                else:
-                    type_id = 1
-            elif self.map_type == "MMM":
-                if unit.unit_type == 51:
-                    type_id = 0
-                elif unit.unit_type == 48:
-                    type_id = 1
-                else:
-                    type_id = 2
+            else:
+                type_id = self.enemy_type_bit_map_alignment[unit.unit_type]
 
         return type_id
 
@@ -2423,28 +2463,37 @@ class StarCraft2Env(MultiAgentEnv):
         self._min_unit_type = min_unit_type
         if self.map_type == "marines":
             self.marine_id = min_unit_type
+            self.ally_id_type_map = {self.marine_id: UnitType.MARINE}
         elif self.map_type == "stalkers_and_zealots":
             self.stalker_id = min_unit_type
             self.zealot_id = min_unit_type + 1
+            self.ally_id_type_map = {self.stalker_id: UnitType.STALKER, self.zealot_id: UnitType.ZEALOT}
         elif self.map_type == "colossi_stalkers_zealots":
             self.colossus_id = min_unit_type
             self.stalker_id = min_unit_type + 1
             self.zealot_id = min_unit_type + 2
+            self.ally_id_type_map = {self.colossus_id: UnitType.COLOSSUS, self.stalker_id: UnitType.STALKER, self.zealot_id: UnitType.ZEALOT}
         elif self.map_type == "MMM":
             self.marauder_id = min_unit_type
             self.marine_id = min_unit_type + 1
             self.medivac_id = min_unit_type + 2
+            self.ally_id_type_map = {self.marauder_id: UnitType.MARAUDER, self.marine_id: UnitType.MARINE, self.medivac_id: UnitType.MEDIVAC}
         elif self.map_type == "zealots":
             self.zealot_id = min_unit_type
+            self.ally_id_type_map = {self.zealot_id: UnitType.ZEALOT}
         elif self.map_type == "hydralisks":
             self.hydralisk_id = min_unit_type
+            self.ally_id_type_map = {self.hydralisk_id: UnitType.HYDRALISK}
         elif self.map_type == "stalkers":
             self.stalker_id = min_unit_type
+            self.ally_id_type_map = {self.stalker_id: UnitType.STALKER}
         elif self.map_type == "colossus":
             self.colossus_id = min_unit_type
+            self.ally_id_type_map = {self.colossus_id: UnitType.COLOSSUS}
         elif self.map_type == "bane":
             self.baneling_id = min_unit_type
             self.zergling_id = min_unit_type + 1
+            self.ally_id_type_map = {self.baneling_id: UnitType.BANEL, self.zergling_id: UnitType.ZERG}
 
     def only_medivac_left(self, ally):
         """Check if only Medivac units are left."""
@@ -2486,4 +2535,5 @@ class StarCraft2Env(MultiAgentEnv):
         return stats
     
     def get_env_info(self):
-        return self.observation_space, self.share_observation_space, self.action_space, self.n_agents
+        return self.observation_space, self.share_observation_space, self.action_space, self.n_agents, \
+            self.obs_own_feat, self.obs_enemy_feat, self.obs_ally_feat

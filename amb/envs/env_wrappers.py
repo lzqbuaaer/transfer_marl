@@ -62,12 +62,15 @@ class ShareVecEnv(ABC):
     metadata = {"render.modes": ["human", "rgb_array"]}
 
     def __init__(
-        self, num_envs, observation_space, share_observation_space, action_space
+        self, num_envs, observation_space, share_observation_space, action_space, obs_own_feat=None, obs_enemy_feat=None, obs_ally_feat=None
     ):
         self.num_envs = num_envs
         self.observation_space = observation_space
         self.share_observation_space = share_observation_space
         self.action_space = action_space
+        self.obs_own_feat = obs_own_feat
+        self.obs_enemy_feat = obs_enemy_feat
+        self.obs_ally_feat = obs_ally_feat
 
     @abstractmethod
     def reset(self):
@@ -210,7 +213,8 @@ def shareworker(remote, parent_remote, env_fn_wrapper):
             break
         elif cmd == "get_spaces":
             remote.send(
-                (env.observation_space, env.share_observation_space, env.action_space)
+                (env.observation_space, env.share_observation_space, env.action_space, 
+                 getattr(env, 'obs_own_feat', None), getattr(env, 'obs_enemy_feat', None), getattr(env, 'obs_ally_feat', None))
             )
         # elif cmd == "render_vulnerability":
         #     fr = env.render_vulnerability(data)
@@ -255,9 +259,10 @@ class ShareSubprocVecEnv(ShareVecEnv):
         self.remotes[0].send(("get_num_enemies", None))
         self.n_enemies = self.remotes[0].recv()
         self.remotes[0].send(("get_spaces", None))
-        observation_space, share_observation_space, action_space = self.remotes[0].recv()
+        observation_space, share_observation_space, action_space, obs_own_feat, obs_enemy_feat, obs_ally_feat = self.remotes[0].recv()
         ShareVecEnv.__init__(
-            self, len(env_fns), observation_space, share_observation_space, action_space
+            self, len(env_fns), observation_space, share_observation_space, action_space, 
+            obs_own_feat=obs_own_feat, obs_enemy_feat=obs_enemy_feat, obs_ally_feat=obs_ally_feat
         )
 
     def step_async(self, actions, filled=None):
@@ -348,11 +353,12 @@ class ShareSubprocVecDualEnv(ShareSubprocVecEnv):
         self.remotes[0].send(("get_num_agents", None))
         self.n_agents = self.remotes[0].recv()
         self.remotes[0].send(("get_spaces", None))
-        observation_space, share_observation_space, action_space = self.remotes[0].recv()
+        observation_space, share_observation_space, action_space, obs_own_feat, obs_enemy_feat, obs_ally_feat = self.remotes[0].recv()
         self.remotes[0].send(("get_num_agents_dual", None))
         self.n_angels, self.n_demons = self.remotes[0].recv()
         ShareVecEnv.__init__(
-            self, len(env_fns), observation_space, share_observation_space, action_space
+            self, len(env_fns), observation_space, share_observation_space, action_space, 
+            obs_own_feat=obs_own_feat, obs_enemy_feat=obs_enemy_feat, obs_ally_feat=obs_ally_feat
         )
         
 
@@ -418,6 +424,9 @@ class ShareDummyVecEnv(ShareVecEnv):
             env.observation_space,
             env.share_observation_space,
             env.action_space,
+            obs_own_feat=getattr(env, 'obs_own_feat', None),
+            obs_enemy_feat=getattr(env, 'obs_enemy_feat', None),
+            obs_ally_feat=getattr(env, 'obs_ally_feat', None)
         )
         self.actions = None
         try:
