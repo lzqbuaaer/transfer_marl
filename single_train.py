@@ -69,6 +69,7 @@ def main():
             "football",
             "smacv2",
             "toy",
+            "magents",
         ],
         help="Environment name. Choose from: smac, mamujoco, pettingzoo_mpe, gym, football, smacv2.",
     )
@@ -152,7 +153,7 @@ def main():
     if "env_args" in nni_dict:
         nni_update_args(env_args, nni_dict["env_args"])
 
-    algo_args["train"]["map_name"] = env_args["map_name"]
+    # algo_args["train"]["map_name"] = env_args["map_name"]
     # pprint([args, algo_args, env_args])
     # exit(0)
 

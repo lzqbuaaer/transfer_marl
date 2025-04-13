@@ -112,6 +112,9 @@ def make_train_env(env_name, seed, n_threads, env_args):
                 from amb.envs.toy_example.toy_example import ToyExample
 
                 env = ToyExample(env_args)
+            elif env_name == "magents":
+                from amb.envs.magents.magents_env import MAgentsEnv
+                env = MAgentsEnv(env_args)
             else:
                 print("Can not support the " + env_name + "environment.")
                 raise NotImplementedError
@@ -172,6 +175,9 @@ def make_eval_env(env_name, seed, n_threads, env_args):
                 from amb.envs.toy_example.toy_example import ToyExample
 
                 env = ToyExample(env_args)
+            elif env_name == "magents":
+                from amb.envs.magents.magents_env import MAgentsEnv
+                env = MAgentsEnv(env_args)
             else:
                 print("Can not support the " + env_name + "environment.")
                 raise NotImplementedError
@@ -240,6 +246,11 @@ def make_render_env(env_name, seed, env_args):
         env = ToyExample(env_args)
         manual_render = False
         manual_delay = False
+    elif env_name == "magents":
+        from amb.envs.magents.magents_env import MAgentsEnv
+        env_args["render_mode"] = True
+        env = MAgentsEnv(env_args)
+        del env_args["render_mode"]
     else:
         print("Can not support the " + env_name + "environment.")
         raise NotImplementedError

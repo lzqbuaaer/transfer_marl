@@ -8,6 +8,7 @@ from amb.envs.pettingzoo_mpe.pettingzoo_mpe_logger import PettingZooMPELogger
 from amb.envs.gym.gym_logger import GYMLogger
 from amb.envs.football.football_logger import FootballLogger
 from amb.envs.toy_example.toy_logger import ToyLogger
+from amb.envs.magents.magents_logger import MAgentsLogger
 
 FLAGS = flags.FLAGS
 FLAGS(["train_sc.py"])
@@ -21,4 +22,6 @@ LOGGER_REGISTRY = {
     "football": FootballLogger,
     "smacv2": SMACv2Logger,
     "toy": ToyLogger,
+    "magents": MAgentsLogger,
+    "magents_dual": MAgentsLogger,
 }

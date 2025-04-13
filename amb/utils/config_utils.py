@@ -92,6 +92,8 @@ def get_task_name(env, env_args):
         task = env_args["task"]
     elif env == "toy":
         task = "toy"
+    elif env == 'magents':
+        task = "size{}x{}".format(env_args["map_size"], env_args["map_size"])
     return task
 
 
