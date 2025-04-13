@@ -138,3 +138,7 @@ actor_use_dt2gs: False
 actor_skills_num: 4
 obs_transformer_heads: 3
 obs_transformer_depth: 2
+
+# dual training and reverse team
+use_minus_opponent_reward: True
+eval_use_minus_opponent_reward: True

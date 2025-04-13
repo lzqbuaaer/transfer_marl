@@ -29,6 +29,8 @@ class BaseRunner:
         self.env_args = env_args
 
         self.reverse_team = self.env_args['reverse_team']
+        self.use_minus_opponent_reward = algo_args["angel"].get("use_minus_opponent_reward", True)
+        self.eval_use_minus_opponent_reward = algo_args["angel"].get("eval_use_minus_opponent_reward", True)
         
         self.angel_rnn_hidden_size = algo_args["angel"]["hidden_sizes"][-1]
         self.angel_recurrent_n = algo_args["angel"]["recurrent_n"]
@@ -267,7 +269,7 @@ class BaseRunner:
             assert self.num_angels == eval_rewards[0].shape[1]
             assert self.num_demons == eval_rewards[1].shape[1]
             assert eval_rewards[0].shape[0] == eval_rewards[1].shape[0]
-            if self.reverse_team:   # Dual attack: flip the reward while training, here is the same
+            if self.reverse_team and self.eval_use_minus_opponent_reward:   # Dual attack: flip the reward while training, here is the same
                 for process_id in range(eval_rewards[0].shape[0]):
                     eval_rewards[0][process_id, :, :] = np.mean(eval_rewards[1][process_id])
                 last_reward = -eval_rewards[0]
