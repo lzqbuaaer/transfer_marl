@@ -1,0 +1,10 @@
+reverse_team: True
+map_size: 20
+minimap_mode: False
+max_cycles: 400
+extra_features: False
+env_reward_args:
+  step_reward: -0.005
+  dead_penalty: -0.1
+  attack_penalty: -0.1
+  attack_opponent_reward: 0.2

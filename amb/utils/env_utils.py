@@ -115,6 +115,9 @@ def make_train_env(env_name, seed, n_threads, env_args):
             elif env_name == "magents":
                 from amb.envs.magents.magents_env import MAgentsEnv
                 env = MAgentsEnv(env_args)
+            elif env_name == "magents_dual":
+                from amb.envs.magents.magents_dual_env import MAgentsDualEnv
+                env = MAgentsDualEnv(env_args)
             else:
                 print("Can not support the " + env_name + "environment.")
                 raise NotImplementedError
@@ -123,7 +126,7 @@ def make_train_env(env_name, seed, n_threads, env_args):
 
         return init_env
 
-    if env_name == "smac_dual":
+    if env_name == "smac_dual" or env_name == "magents_dual":
         if n_threads == 1:
             return ShareDummyVecDualEnv([get_env_fn(0)])
         else:
@@ -178,6 +181,9 @@ def make_eval_env(env_name, seed, n_threads, env_args):
             elif env_name == "magents":
                 from amb.envs.magents.magents_env import MAgentsEnv
                 env = MAgentsEnv(env_args)
+            elif env_name == "magents_dual":
+                from amb.envs.magents.magents_dual_env import MAgentsDualEnv
+                env = MAgentsDualEnv(env_args)
             else:
                 print("Can not support the " + env_name + "environment.")
                 raise NotImplementedError
@@ -186,7 +192,7 @@ def make_eval_env(env_name, seed, n_threads, env_args):
 
         return init_env
 
-    if env_name == "smac_dual":
+    if env_name == "smac_dual" or env_name == "magents_dual":
         if n_threads == 1:
             return ShareDummyVecDualEnv([get_env_fn(0)])
         else:
@@ -250,6 +256,11 @@ def make_render_env(env_name, seed, env_args):
         from amb.envs.magents.magents_env import MAgentsEnv
         env_args["render_mode"] = True
         env = MAgentsEnv(env_args)
+        del env_args["render_mode"]
+    elif env_name == "magents_dual":
+        from amb.envs.magents.magents_dual_env import MAgentsDualEnv
+        env_args["render_mode"] = True
+        env = MAgentsDualEnv(env_args)
         del env_args["render_mode"]
     else:
         print("Can not support the " + env_name + "environment.")

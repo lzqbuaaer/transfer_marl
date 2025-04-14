@@ -58,8 +58,9 @@ def main():
         default="smac_dual",
         choices=[
             "smac_dual",
+            "magents_dual",
         ],
-        help="Environment name. Choose from: smac_dual.",
+        help="Environment name. Choose from: smac_dual, magents_dual.",
     )
     parser.add_argument("--exp_name", type=str, default="installtest", help="Experiment name.")
     parser.add_argument(

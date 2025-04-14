@@ -9,6 +9,7 @@ from amb.envs.gym.gym_logger import GYMLogger
 from amb.envs.football.football_logger import FootballLogger
 from amb.envs.toy_example.toy_logger import ToyLogger
 from amb.envs.magents.magents_logger import MAgentsLogger
+from amb.envs.magents.magents_dual_logger import MAgentsDualLogger
 
 FLAGS = flags.FLAGS
 FLAGS(["train_sc.py"])
@@ -23,5 +24,5 @@ LOGGER_REGISTRY = {
     "smacv2": SMACv2Logger,
     "toy": ToyLogger,
     "magents": MAgentsLogger,
-    "magents_dual": MAgentsLogger,
+    "magents_dual": MAgentsDualLogger,
 }

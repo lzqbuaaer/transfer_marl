@@ -94,6 +94,8 @@ def get_task_name(env, env_args):
         task = "toy"
     elif env == 'magents':
         task = "size{}x{}".format(env_args["map_size"], env_args["map_size"])
+    elif env == 'magents_dual':
+        task = "size{}x{}".format(env_args["map_size"], env_args["map_size"])
     return task
 
 
