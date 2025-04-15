@@ -18,6 +18,8 @@ class PPOActor(nn.Module):
     def __init__(self, args, obs_space, action_space, device=torch.device("cpu")):
         super(PPOActor, self).__init__()
         self.args = args
+        self.n_agents = args.get("n_agents", 1)
+        self.n_enemies = args.get("n_enemies", 0)
         self.gain = args["gain"]
         self.hidden_sizes = args["hidden_sizes"]
         self.initialization_method = args["initialization_method"]
@@ -44,8 +46,12 @@ class PPOActor(nn.Module):
             self.static_env_net = EnvLayer(args)
 
         if len(obs_shape) == 3:
+            self.n_agents = obs_shape[0] * obs_shape[1]
+            self.n_enemies = 0
+            
+            cnn_obs_shape = [obs_shape[2], obs_shape[0], obs_shape[1]]
             self.cnn = CNNLayer(
-                obs_shape,
+                cnn_obs_shape,
                 self.hidden_sizes,
                 self.initialization_method,
                 self.activation_func,
@@ -80,13 +86,19 @@ class PPOActor(nn.Module):
             self.own_feat = args.get("obs_own_feat", 5)
             self.own_feat_length = self.own_feat
             self.enemy_feat = args.get("obs_enemy_feat", 5)
-            self.enemy_feat_length = self.args["n_enemies"] * self.enemy_feat
+            self.enemy_feat_length = self.n_enemies * self.enemy_feat
             self.ally_feat = args.get("obs_ally_feat", 5)
-            self.ally_feat_length = (self.args["n_agents"] - 1) * self.ally_feat
+            self.ally_feat_length = (self.n_agents - 1) * self.ally_feat
             
             self.own_feat_token_embedding = nn.Linear(self.own_feat, self.hidden_sizes[-1])
             self.enemy_feat_token_embedding = nn.Linear(self.enemy_feat, self.hidden_sizes[-1])
             self.ally_feat_token_embedding = nn.Linear(self.ally_feat, self.hidden_sizes[-1])
+            if len(obs_shape) == 3:
+                self.pos_embed = nn.Parameter(torch.randn(1, obs_shape[0] * obs_shape[1], self.hidden_sizes[-1]))
+            self.self_action_space = self.action_space.n - (self.n_agents - 1) * args.get("action_ally_feat", 0) - \
+                                    (self.n_enemies) * args.get("action_enemy_feat", 1)
+            self.enemy_action_space = (self.n_enemies) * args.get("action_enemy_feat", 1)
+            self.ally_action_space = (self.n_agents - 1) * args.get("action_ally_feat", 0)
             
             if self.actor_use_dt2gs:       # DT2GS
                 self.skill_embedding = nn.Linear(self.actor_skills_num, self.hidden_sizes[-1])
@@ -102,11 +114,11 @@ class PPOActor(nn.Module):
                 
                 self.transformer = Transformer(emb=self.hidden_sizes[-1], heads=self.heads, 
                                                depth=self.depth, output_dim=1)
-                self.act = nn.Linear(2 * self.hidden_sizes[-1], 6)
+                self.act = nn.Linear(2 * self.hidden_sizes[-1], self.self_action_space)
             elif self.actor_use_updet:
                 self.transformer = Encoder(emb=self.hidden_sizes[-1], heads=self.heads, 
                                         depth=self.depth)
-                self.act = nn.Linear(self.hidden_sizes[-1], 6)
+                self.act = nn.Linear(self.hidden_sizes[-1], self.self_action_space)
                 
                 if self.actor_divide_conquer:
                     self.agent_relative = Encoder(emb=self.hidden_sizes[-1], heads=self.heads,
@@ -141,6 +153,16 @@ class PPOActor(nn.Module):
         
         # obs_alignment
         obs = check(obs).to(**self.tpdv)
+        if len(obs.shape) >= 4:
+            if not self.actor_use_updet:
+                # obs: [batch, size, size, channel] -> [batch, channel, size, size]
+                obs = obs.permute(0, 3, 1, 2)
+            else:
+                # obs: [batch, size, size, channel] -> [batch, size * size * channel] -> [batch, ally_feat + own_feat]
+                obs = obs.reshape(obs.shape[0], -1, obs.shape[-1])
+                middle_index = obs.shape[1] // 2
+                obs = torch.cat([obs[:, :middle_index], obs[:, middle_index + 1:], obs[:, [middle_index], :]], dim=1)
+                obs = obs.reshape(obs.shape[0], -1)
         
         rnn_states = check(rnn_states).to(**self.tpdv)
         masks = check(masks).to(**self.tpdv)
@@ -160,12 +182,17 @@ class PPOActor(nn.Module):
             assert obs.shape[-1] == self.ally_feat_length + self.enemy_feat_length + self.own_feat_length
             
             obs_own = obs[..., self.ally_feat_length + self.enemy_feat_length:].unsqueeze(-2)
-            obs_own_embedding = self.own_feat_token_embedding(obs_own)
-            obs_enemy = obs[..., self.ally_feat_length: self.ally_feat_length + self.enemy_feat_length].reshape(*obs.shape[:-1], -1, self.enemy_feat)
-            obs_enemy_embedding = self.enemy_feat_token_embedding(obs_enemy)
-            obs_ally = obs[..., :self.ally_feat_length].reshape(*obs.shape[:-1], -1, self.ally_feat)
-            obs_ally_embedding = self.ally_feat_token_embedding(obs_ally)
-            obs_embedding = torch.cat([obs_own_embedding, obs_enemy_embedding, obs_ally_embedding], dim=-2)
+            obs_embedding = self.own_feat_token_embedding(obs_own)
+            if self.enemy_feat_length > 0:
+                obs_enemy = obs[..., self.ally_feat_length: self.ally_feat_length + self.enemy_feat_length].reshape(*obs.shape[:-1], -1, self.enemy_feat)
+                obs_enemy_embedding = self.enemy_feat_token_embedding(obs_enemy)
+                obs_embedding = torch.cat([obs_embedding, obs_enemy_embedding], dim=-2)
+            if self.ally_feat_length > 0:
+                obs_ally = obs[..., :self.ally_feat_length].reshape(*obs.shape[:-1], -1, self.ally_feat)
+                obs_ally_embedding = self.ally_feat_token_embedding(obs_ally)
+                obs_embedding = torch.cat([obs_embedding, obs_ally_embedding], dim=-2)
+            if len(obs.shape) >= 4:
+                obs_embedding = obs_embedding + self.pos_embed
             
             # Calculate the relationship between agents in order to divide and conquer
             if self.actor_divide_conquer:
@@ -206,8 +233,12 @@ class PPOActor(nn.Module):
                 else:
                     chosen_mask = torch.ones(obs_embedding.shape[0], obs_embedding.shape[1]).bool().to(**self.tpdv)
                 chosen_mask[:, 1: (1 + chosen.shape[1])] = chosen
-                if available_actions is not None:
-                    available_actions[:, 6:][chosen[:, :self.args["n_enemies"]]==False] = 0.
+                if available_actions is not None and self.n_enemies > 0:
+                    # TODO: How if action_enemy_feat != 1?
+                    available_actions[:, self.self_action_space:][chosen[:, :self.n_enemies]==False] = 0.
+                if available_actions is not None and self.n_agents > 1:
+                    # TODO: How if action_ally_feat != 1?
+                    pass
             else:
                 chosen_mask = None
                             
@@ -249,15 +280,17 @@ class PPOActor(nn.Module):
         else:
             basic_actions = self.act(total_features[..., 0, :])
 
+            logits = basic_actions
             # each enemy has an output Q
-            enemies_actions = []
-            for i in range(self.args['n_enemies']):
-                enemy_action = self.act(total_features[:, 1 + i, :])
-                enemy_action = torch.mean(enemy_action, dim=-1)
-                enemies_actions.append(enemy_action)
-            enemies_actions = torch.stack(enemies_actions, dim=-1)
+            if self.n_enemies != 0:
+                enemies_actions = []
+                for i in range(self.n_enemies):
+                    enemy_action = self.act(total_features[:, 1 + i, :])
+                    enemy_action = torch.mean(enemy_action, dim=-1)
+                    enemies_actions.append(enemy_action)
+                enemies_actions = torch.stack(enemies_actions, dim=-1)
 
-            logits = torch.cat((basic_actions, enemies_actions), dim=-1)
+                logits = torch.cat((basic_actions, enemies_actions), dim=-1)
             if available_actions is not None:
                 logits[available_actions == 0] = -1e10
             action_dist = FixedCategorical(logits=logits)
@@ -288,14 +321,14 @@ class PPOActor(nn.Module):
         previous_skills_embedding = self.skill_embedding(previous_skills).unsqueeze(-2).expand(-1, obs_embedding.shape[1], -1)
         
         skill_features = self.skill_encoder(torch.cat([obs_embedding, previous_skills_embedding], dim=-1))
-        assert skill_features.size() == (obs.shape[0], self.args["n_agents"] + self.args["n_enemies"], self.hidden_sizes[-1])
+        assert skill_features.size() == (obs.shape[0], self.n_agents + self.n_enemies, self.hidden_sizes[-1])
         if self.use_recurrent_policy:
             if obs_embedding.shape[0] == rnn_states.shape[0]:
                 rnn_states = rnn_states * masks.squeeze(-1).view(-1, 1, 1).repeat(1, self.recurrent_n, rnn_states.shape[-1])
                 
                 skill_features_rnn = []
                 rnn_states_skill = rnn_states.clone()
-                for i in range(self.args["n_agents"] + self.args["n_enemies"]):
+                for i in range(self.n_agents + self.n_enemies):
                     skill_feature_rnn, _ = self.rnn(skill_features[:, i], rnn_states_skill, masks)
                     skill_features_rnn.append(skill_feature_rnn)
                 skill_features = torch.stack(skill_features_rnn, dim=1)
@@ -314,7 +347,7 @@ class PPOActor(nn.Module):
                     rnn_states = rnn_states * masks[t].view(-1, 1, 1).repeat(1, self.recurrent_n, rnn_states.shape[-1])
                     skill_features_rnn = []
                     rnn_states_skill = rnn_states.clone()
-                    for i in range(self.args["n_agents"] + self.args["n_enemies"]):
+                    for i in range(self.n_agents + self.n_enemies):
                         skill_feature_rnn, _ = self.rnn(skill_features[t, :, i], rnn_states_skill, masks[t])
                         skill_features_rnn.append(skill_feature_rnn)
                     skill_features = torch.stack(skill_features_rnn, dim=1)
@@ -345,7 +378,7 @@ class PPOActor(nn.Module):
 
         # each enemy has an output Q
         enemies_actions = []
-        for i in range(self.args['n_enemies']):
+        for i in range(self.n_enemies):
             enemy_action = self.act(total_features[:, 1 + i, :])
             enemy_action = torch.mean(enemy_action, dim=-1)
             enemies_actions.append(enemy_action)

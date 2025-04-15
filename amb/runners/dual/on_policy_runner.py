@@ -45,7 +45,11 @@ class OnPolicyRunner(BaseRunner):
                     scheme["obs"]["extra"] = ["sample_next"]
                     scheme["masks"]["extra"] = ["sample_next"]
                 if self.actor_divide_conquer:
-                    scheme["chosens"] = {"vshape": (self.num_angels + self.num_demons - 1,), "offset": 0}
+                    obs_shape = self.envs.observation_space[0][0] if isinstance(self.envs.observation_space[0][0], list) else self.envs.observation_space[0][0].shape
+                    if len(obs_shape) >= 3:
+                        scheme["chosens"] = {"vshape": (obs_shape[0] * obs_shape[1] - 1,), "offset": 0}
+                    else:
+                        scheme["chosens"] = {"vshape": (self.num_angels + self.num_demons - 1,), "offset": 0}
                 if self.actor_use_dt2gs:
                     scheme["previous_skills"] = {"vshape": (self.actor_skills_num,), "offset": 1}
                 if self.action_type == "Discrete":
