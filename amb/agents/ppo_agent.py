@@ -68,13 +68,13 @@ class PPOAgent(BaseAgent):
         if self.actor_use_dt2gs:
             actions, skills = actions
         if self.actor_divide_conquer:
-            actions, chosen, chosen_prob = actions
+            actions, chosen, chosen_log_prob = actions
         action_dist = actions
         actions = action_dist.sample()
         action_log_probs = action_dist.log_probs(actions)
         if self.actor_divide_conquer:
             actions = (actions, chosen)
-            action_log_probs = action_log_probs + torch.log(chosen_prob)
+            action_log_probs = action_log_probs + chosen_log_prob
         if self.actor_use_dt2gs:
             actions = (actions, skills)
         return actions, action_log_probs, rnn_states

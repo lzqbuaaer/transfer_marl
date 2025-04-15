@@ -144,11 +144,11 @@ class MAPPO:
         if self.actor_use_dt2gs:
             action_dist, _ = action_dist
         if self.actor_divide_conquer:
-            action_dist, _, chosen_prob = action_dist
+            action_dist, _, chosen_log_prob = action_dist
         
         action_log_probs = action_dist.log_probs(action)
         if self.actor_divide_conquer:
-            action_log_probs = action_log_probs + torch.log(chosen_prob)
+            action_log_probs = action_log_probs + chosen_log_prob
         if active_masks is not None:
             if self.action_type == "Discrete":
                 dist_entropy = (

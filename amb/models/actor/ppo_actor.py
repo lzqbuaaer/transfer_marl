@@ -227,7 +227,7 @@ class PPOActor(nn.Module):
                     chosen = torch.bernoulli(probs).bool()
                 else:
                     chosen = probs > 0.5
-                chosen_prob = torch.where(chosen, probs, 1 - probs).prod(dim=-1).unsqueeze(-1)  # [batch, 1]
+                chosen_log_prob = torch.where(chosen, torch.log(probs), torch.log(1 - probs)).sum(dim=-1).unsqueeze(-1)  # [batch, 1]
                 if self.use_recurrent_policy:
                     chosen_mask = torch.ones(obs_embedding.shape[0], obs_embedding.shape[1] + self.recurrent_n).bool().to(**self.tpdv)
                 else:
@@ -296,12 +296,18 @@ class PPOActor(nn.Module):
             action_dist = FixedCategorical(logits=logits)
         
         if self.actor_divide_conquer:
-            return (action_dist, chosen, chosen_prob), rnn_states
+            return (action_dist, chosen, chosen_log_prob), rnn_states
         else:
             return action_dist, rnn_states
         
     def forward_dt2gs(self, obs, rnn_states, masks, available_actions=None, previous_skills=None):
         obs = check(obs).to(**self.tpdv)
+        if len(obs.shape) >= 4:
+            # obs: [batch, size, size, channel] -> [batch, size * size * channel] -> [batch, ally_feat + own_feat]
+            obs = obs.reshape(obs.shape[0], -1, obs.shape[-1])
+            middle_index = obs.shape[1] // 2
+            obs = torch.cat([obs[:, :middle_index], obs[:, middle_index + 1:], obs[:, [middle_index], :]], dim=1)
+            obs = obs.reshape(obs.shape[0], -1)
         
         rnn_states = check(rnn_states).to(**self.tpdv)
         masks = check(masks).to(**self.tpdv)
@@ -312,12 +318,17 @@ class PPOActor(nn.Module):
             available_actions = check(available_actions).to(**self.tpdv)
             
         obs_own = obs[..., self.ally_feat_length + self.enemy_feat_length:].unsqueeze(-2)
-        obs_own_embedding = self.own_feat_token_embedding(obs_own)
-        obs_enemy = obs[..., self.ally_feat_length: self.ally_feat_length + self.enemy_feat_length].reshape(*obs.shape[:-1], -1, self.enemy_feat)
-        obs_enemy_embedding = self.enemy_feat_token_embedding(obs_enemy)
-        obs_ally = obs[..., :self.ally_feat_length].reshape(*obs.shape[:-1], -1, self.ally_feat)
-        obs_ally_embedding = self.ally_feat_token_embedding(obs_ally)
-        obs_embedding = torch.cat([obs_own_embedding, obs_enemy_embedding, obs_ally_embedding], dim=-2)
+        obs_embedding = self.own_feat_token_embedding(obs_own)
+        if self.enemy_feat_length > 0:
+            obs_enemy = obs[..., self.ally_feat_length: self.ally_feat_length + self.enemy_feat_length].reshape(*obs.shape[:-1], -1, self.enemy_feat)
+            obs_enemy_embedding = self.enemy_feat_token_embedding(obs_enemy)
+            obs_embedding = torch.cat([obs_embedding, obs_enemy_embedding], dim=-2)
+        if self.ally_feat_length > 0:
+            obs_ally = obs[..., :self.ally_feat_length].reshape(*obs.shape[:-1], -1, self.ally_feat)
+            obs_ally_embedding = self.ally_feat_token_embedding(obs_ally)
+            obs_embedding = torch.cat([obs_embedding, obs_ally_embedding], dim=-2)
+        if len(obs.shape) >= 4:
+            obs_embedding = obs_embedding + self.pos_embed
         previous_skills_embedding = self.skill_embedding(previous_skills).unsqueeze(-2).expand(-1, obs_embedding.shape[1], -1)
         
         skill_features = self.skill_encoder(torch.cat([obs_embedding, previous_skills_embedding], dim=-1))
@@ -376,15 +387,16 @@ class PPOActor(nn.Module):
         total_features = torch.cat([memorys, transformer_outputs], dim=-1)
         basic_actions = self.act(total_features[..., 0, :])
 
+        logits = basic_actions
         # each enemy has an output Q
-        enemies_actions = []
-        for i in range(self.n_enemies):
-            enemy_action = self.act(total_features[:, 1 + i, :])
-            enemy_action = torch.mean(enemy_action, dim=-1)
-            enemies_actions.append(enemy_action)
-        enemies_actions = torch.stack(enemies_actions, dim=-1)
-
-        logits = torch.cat((basic_actions, enemies_actions), dim=-1)
+        if self.n_enemies != 0:
+            enemies_actions = []
+            for i in range(self.n_enemies):
+                enemy_action = self.act(total_features[:, 1 + i, :])
+                enemy_action = torch.mean(enemy_action, dim=-1)
+                enemies_actions.append(enemy_action)
+            enemies_actions = torch.stack(enemies_actions, dim=-1)
+            logits = torch.cat((basic_actions, enemies_actions), dim=-1)
         if available_actions is not None:
             logits[available_actions == 0] = -1e10
         action_dist = FixedCategorical(logits=logits)
