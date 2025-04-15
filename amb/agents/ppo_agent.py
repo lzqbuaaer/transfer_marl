@@ -3,6 +3,7 @@ import torch
 from amb.agents.base_agent import BaseAgent
 from amb.models.actor.ppo_actor import PPOActor
 from amb.models.belief.transformer_belief import TransformerBelief
+from amb.utils.env_utils import get_shape_from_obs_space
 
 class PPOAgent(BaseAgent):
     def __init__(self, args, obs_space, act_space, device=torch.device("cpu"), ally_num=2, agent_type="victim"):
@@ -19,7 +20,9 @@ class PPOAgent(BaseAgent):
         
         self.env_belief = args.get("env_belief", False)
         if self.env_belief:
+            args["obs_shape"] = get_shape_from_obs_space(obs_space)
             self.belief = TransformerBelief(args, device=device)
+            del args["obs_shape"]
         self.actor_divide_conquer = args.get("actor_divide_conquer", False)
         self.actor_use_dt2gs = args.get("actor_use_dt2gs", False)
 
