@@ -187,10 +187,11 @@ def main():
     # start training
     from amb.runners import get_dual_runner
     runner = get_dual_runner(args["run"], args["angel"])(args, algo_args, env_args)
-    if algo_args["angel"]['use_render']:  # render, not train
-        runner.render()
-    else:
-        runner.run()
+    # if algo_args["angel"]['use_render']:  # render, not train
+    #     runner.render()
+    # else:
+    #     runner.run()
+    runner.run()
     runner.close()
 
 

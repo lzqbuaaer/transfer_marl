@@ -79,8 +79,9 @@ class OnPolicyRunner(BaseRunner):
     def run(self):
         """Run the training (or rendering) pipeline."""
         if self.algo_args["angel"]['matter_transfer_test']:
-            self.logger.init()
-            self.logger.episode_init(0)
+            if self.algo_args["angel"]['use_render'] is False:
+                self.logger.init()
+                self.logger.episode_init(0)
             print("Searching for the proper factors in transfer test of MATTER...")
             self.eval(few_shot_learning_mode=True)
             

@@ -85,6 +85,16 @@ class BaseRunner:
 
         # set the config of env
         if self.algo_args["angel"]['use_render']:  # make envs for rendering
+            self.eval_envs = (
+                make_eval_env(
+                    args["env"],
+                    algo_args["angel"]["seed"],
+                    algo_args["angel"]["n_eval_rollout_threads"],
+                    env_args,
+                )
+                if self.algo_args["angel"]['matter_transfer_test']
+                else None
+            )
             (
                 self.envs,
                 self.manual_render,
@@ -185,7 +195,8 @@ class BaseRunner:
         """Evaluate the model. All algorithms should fit this evaluation pipeline."""
         self.algo.prep_rollout()
 
-        self.logger.eval_init(self.n_eval_rollout_threads)  # logger callback at the beginning of evaluation
+        if self.algo_args["angel"]['use_render'] is False:
+            self.logger.eval_init(self.n_eval_rollout_threads)  # logger callback at the beginning of evaluation
         eval_episode = 0
 
         eval_obs, eval_share_obs, eval_available_actions = self.eval_envs.reset()
@@ -277,7 +288,8 @@ class BaseRunner:
                 last_reward = eval_rewards[0]
 
             eval_data = (eval_obs[0], eval_share_obs[0], eval_rewards[0], eval_dones[0], eval_infos[0], eval_available_actions[0])
-            self.logger.eval_per_step(eval_data)  # logger callback at each step of evaluation
+            if self.algo_args["angel"]['use_render'] is False:
+                self.logger.eval_per_step(eval_data)  # logger callback at each step of evaluation
 
             eval_dones_env = np.all(eval_dones[0], axis=1)
 
@@ -301,11 +313,13 @@ class BaseRunner:
             for eval_i in range(self.n_eval_rollout_threads):
                 if eval_dones_env[eval_i]:
                     eval_episode += 1
-                    self.logger.eval_thread_done(eval_i)  # logger callback when an episode is done
+                    if self.algo_args["angel"]['use_render'] is False:
+                        self.logger.eval_thread_done(eval_i)  # logger callback when an episode is done
 
             if eval_episode >= (self.algo_args["angel"]["eval_episodes"] if not few_shot_learning_mode 
                                 else self.algo_args["angel"]["matter_transfer_few_shot_episodes"]):
-                self.logger.eval_log(eval_episode)  # logger callback at the end of evaluation
+                if self.algo_args["angel"]['use_render'] is False:
+                    self.logger.eval_log(eval_episode)  # logger callback at the end of evaluation
                 if few_shot_learning_mode:
                     self.env_prior = np.stack(eval_angel_env_belief_list, axis=0).mean(axis=0)
                     self.eval_angel_env_belief_ground_truth[:] = self.env_prior
@@ -319,13 +333,25 @@ class BaseRunner:
         self.algo.prep_rollout()
 
         for _ in range(self.algo_args["angel"]['render_episodes']):
-            eval_angel_rnn_states = np.zeros((self.n_eval_rollout_threads, self.num_angels, self.angel_recurrent_n, self.angel_rnn_hidden_size), dtype=np.float32)
-            eval_demon_rnn_states = np.zeros((self.n_eval_rollout_threads, self.num_demons, self.demon_recurrent_n, self.demon_rnn_hidden_size), dtype=np.float32)
+            eval_angel_rnn_states = np.zeros((1, self.num_angels, self.angel_recurrent_n, self.angel_rnn_hidden_size), dtype=np.float32)
+            eval_demon_rnn_states = np.zeros((1, self.num_demons, self.demon_recurrent_n, self.demon_rnn_hidden_size), dtype=np.float32)
+            if self.env_belief:
+                eval_angel_rnn_states_belief = np.zeros((1, self.num_angels, self.angel_recurrent_n, self.angel_rnn_hidden_size), dtype=np.float32)
+                eval_angel_env_belief = np.zeros((1, self.num_angels, self.env_belief_dim), dtype=np.float32)
+                eval_angel_env_belief[:] = self.env_prior
+                eval_bayesian_update = np.zeros((1), dtype=bool)
+            else:
+                eval_angel_env_belief = None
+            if self.actor_use_dt2gs:
+                eval_angel_previous_skills = np.zeros((1, self.num_angels, self.actor_skills_num))
 
-            eval_angel_masks = np.ones((self.n_eval_rollout_threads, self.num_angels, 1), dtype=np.float32)
-            eval_demon_masks = np.ones((self.n_eval_rollout_threads, self.num_demons, 1), dtype=np.float32)
+            eval_angel_masks = np.ones((1, self.num_angels, 1), dtype=np.float32)
+            eval_demon_masks = np.ones((1, self.num_demons, 1), dtype=np.float32)
 
             eval_obs, _, eval_available_actions = self.envs.reset()
+            last_obs = [np.expand_dims(np.array(eval_obs[i]), axis=0) for i in range(2)]
+            last_reward = np.zeros((1, self.num_angels, 1))
+            
             rewards = 0
             while True:
                 eval_obs = [np.expand_dims(np.array(eval_obs[i]), axis=0) for i in range(2)]
@@ -334,14 +360,34 @@ class BaseRunner:
                     
                 eval_angel_actions_collector = []
                 for agent_id in range(self.num_angels):
+                    if self.env_belief and (not self.env_belief_matter):
+                        env_belief, rnn_state_belief = self.angels[agent_id].forward_belief(
+                            eval_obs[0][:, agent_id],
+                            last_reward[:, agent_id],
+                            last_obs[0][:, agent_id],
+                            eval_angel_env_belief[:, agent_id],
+                            eval_angel_rnn_states_belief[:, agent_id],
+                            eval_angel_masks[:, agent_id],
+                        )
+                        eval_angel_env_belief[eval_bayesian_update == True, agent_id] = _t2n(env_belief)[eval_bayesian_update == True]
+                        eval_angel_rnn_states_belief[eval_bayesian_update == True, agent_id] = _t2n(rnn_state_belief)[eval_bayesian_update == True]
+                    
                     eval_actions, temp_rnn_state = self.angels[agent_id].perform(
                         eval_obs[0][:, agent_id],
                         eval_angel_rnn_states[:, agent_id],
                         eval_angel_masks[:, agent_id],
                         eval_available_actions[0][:, agent_id]
                         if eval_available_actions[0][0] is not None else None,
+                        env_belief = (self.eval_angel_env_belief_ground_truth[:1, agent_id] if self.env_belief_matter 
+                                    else eval_angel_env_belief[:, agent_id]) if self.env_belief else None,
+                        previous_skills = eval_angel_previous_skills[:, agent_id] if self.actor_use_dt2gs else None,
                         deterministic=True,
                     )
+                    if self.actor_use_dt2gs:
+                        eval_actions, skills = eval_actions
+                        eval_angel_previous_skills[:, agent_id] = _t2n(skills)
+                    if self.actor_divide_conquer:
+                        eval_actions, chosen = eval_actions
                     eval_angel_rnn_states[:, agent_id] = _t2n(temp_rnn_state)
                     eval_angel_actions_collector.append(_t2n(eval_actions))
                 eval_angel_actions = np.array(eval_angel_actions_collector).transpose(1, 0, 2)
@@ -360,10 +406,22 @@ class BaseRunner:
                     eval_demon_actions_collector.append(_t2n(eval_actions))
                 eval_demon_actions = np.array(eval_demon_actions_collector).transpose(1, 0, 2)
                 
+                last_obs = eval_obs
                 eval_obs, eval_share_obs, eval_rewards, eval_dones, eval_infos, eval_available_actions = self.envs.step((eval_angel_actions[0], eval_demon_actions[0]))
+                if self.env_belief:
+                    eval_bayesian_update[:] = True
+                eval_rewards = [np.expand_dims(np.array(eval_rewards[i]), axis=0) for i in range(2)]
+                if self.reverse_team and self.eval_use_minus_opponent_reward:   # Dual attack: flip the reward while training, here is the same
+                    for process_id in range(eval_rewards[0].shape[0]):
+                        eval_rewards[0][process_id, :, :] = np.mean(eval_rewards[1][process_id])
+                    last_reward = -eval_rewards[0]
+                else:
+                    last_reward = eval_rewards[0]
+                    
+                    # np.expand_dims(np.array(eval_obs[i]), axis=0)
                 # rewards += eval_rewards[0][0]
                 # MARL versus MARL, recording rewards of the opponents.
-                rewards += eval_rewards[1][0]
+                rewards += eval_rewards[0][0][1][0]
                 if self.manual_render:
                     self.envs.render()
                 if self.manual_delay:
@@ -408,6 +466,8 @@ class BaseRunner:
         """Close environment, writter, and log file."""
         if self.algo_args["angel"]['use_render']:
             self.envs.close()
+            if self.algo_args["angel"]['matter_transfer_test']:
+                self.eval_envs.close()
         else:
             self.envs.close()
             if self.algo_args["angel"]["use_eval"] and self.eval_envs is not self.envs:
