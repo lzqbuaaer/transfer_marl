@@ -35,6 +35,8 @@ class PPOActor(nn.Module):
         self.env_belief_dim = args.get("env_belief_dim", 0)
         print(self.env_belief, self.env_belief_dim)
         self.actor_divide_conquer = args.get("actor_divide_conquer", False)
+        self.actor_use_subplay = args.get("actor_use_subplay", False)
+        self.subplay_uncertainty = args.get("subplay_uncertainty", 0.5)
         self.actor_use_dt2gs = args.get("actor_use_dt2gs", False)
         if self.actor_use_dt2gs:
             self.actor_skills_num = args.get("actor_skills_num", 4)
@@ -120,7 +122,7 @@ class PPOActor(nn.Module):
                                         depth=self.depth)
                 self.act = nn.Linear(self.hidden_sizes[-1], self.self_action_space)
                 
-                if self.actor_divide_conquer:
+                if self.actor_divide_conquer and not self.actor_use_subplay:
                     self.agent_relative = Encoder(emb=self.hidden_sizes[-1], heads=self.heads,
                                                 depth=self.depth)
 
@@ -195,7 +197,7 @@ class PPOActor(nn.Module):
                 obs_embedding = obs_embedding + self.pos_embed
             
             # Calculate the relationship between agents in order to divide and conquer
-            if self.actor_divide_conquer:
+            if self.actor_divide_conquer and not self.actor_use_subplay:
                 if self.use_recurrent_policy:
                     rnn_states_dc = rnn_states.clone()
                     if obs_embedding.shape[0] == rnn_states_dc.shape[0]:
@@ -239,6 +241,17 @@ class PPOActor(nn.Module):
                 if available_actions is not None and self.n_agents > 1:
                     # TODO: How if action_ally_feat != 1?
                     pass
+            elif self.actor_divide_conquer:
+                if deterministic:
+                    chosen = torch.ones(obs_embedding.shape[0], obs_embedding.shape[1] - 1).bool().to(**self.tpdv)
+                else:
+                    chosen = (torch.rand(obs_embedding.shape[0], obs_embedding.shape[1] - 1) > self.subplay_uncertainty).to(**self.tpdv)
+                chosen_log_prob = torch.zeros_like(chosen).sum(dim=-1).unsqueeze(-1)
+                if self.use_recurrent_policy:
+                    chosen_mask = torch.ones(obs_embedding.shape[0], obs_embedding.shape[1] + self.recurrent_n).bool().to(**self.tpdv)
+                else:
+                    chosen_mask = torch.ones(obs_embedding.shape[0], obs_embedding.shape[1]).bool().to(**self.tpdv)
+                chosen_mask[:, 1: (1 + chosen.shape[1])] = chosen
             else:
                 chosen_mask = None
                             

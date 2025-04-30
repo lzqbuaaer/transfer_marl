@@ -24,6 +24,7 @@ class PPOAgent(BaseAgent):
             self.belief = TransformerBelief(args, device=device)
             del args["obs_shape"]
         self.actor_divide_conquer = args.get("actor_divide_conquer", False)
+        self.actor_use_subplay = args.get("actor_use_subplay", False)
         self.actor_use_dt2gs = args.get("actor_use_dt2gs", False)
 
     def forward(self, obs, rnn_states, masks, available_actions=None, env_belief=None, previous_skills=None):
@@ -77,7 +78,8 @@ class PPOAgent(BaseAgent):
         action_log_probs = action_dist.log_probs(actions)
         if self.actor_divide_conquer:
             actions = (actions, chosen)
-            action_log_probs = action_log_probs + chosen_log_prob
+            if not self.actor_use_subplay:
+                action_log_probs = action_log_probs + chosen_log_prob
         if self.actor_use_dt2gs:
             actions = (actions, skills)
         return actions, action_log_probs, rnn_states

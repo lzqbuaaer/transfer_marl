@@ -134,6 +134,8 @@ belief_num_mini_batch: 1
 
 actor_use_updet: False
 actor_divide_conquer: False
+actor_use_subplay: False
+subplay_uncertainty: 0.5
 actor_use_dt2gs: False
 actor_skills_num: 4
 obs_transformer_heads: 3

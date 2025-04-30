@@ -45,6 +45,7 @@ class MAPPO:
         self.env_belief = args.get("env_belief", False)
         self.env_belief_matter = args.get("env_belief_matter", False)
         self.actor_divide_conquer = args.get("actor_divide_conquer", False)
+        self.actor_use_subplay = args.get("actor_use_subplay", False)
         self.actor_use_dt2gs = args.get("actor_use_dt2gs", False)
         if self.env_belief:
             env_prior_path = args.get("env_prior_path", "./env_prior.npy")
@@ -147,7 +148,7 @@ class MAPPO:
             action_dist, _, chosen_log_prob = action_dist
         
         action_log_probs = action_dist.log_probs(action)
-        if self.actor_divide_conquer:
+        if self.actor_divide_conquer and not self.actor_use_subplay:
             action_log_probs = action_log_probs + chosen_log_prob
         if active_masks is not None:
             if self.action_type == "Discrete":
