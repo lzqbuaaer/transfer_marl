@@ -83,6 +83,10 @@ def make_train_env(env_name, seed, n_threads, env_args):
                 from amb.envs.smacv2.smacv2_env import SMACv2Env
 
                 env = SMACv2Env(env_args)
+            elif env_name == "smacv2_dual":
+                from amb.envs.smacv2.smacv2_dual_env import SMACv2DualEnv
+
+                env = SMACv2DualEnv(env_args)
             elif env_name == "mamujoco":
                 from amb.envs.mamujoco.mamujoco_env import (
                     MAMujocoEnv,
@@ -126,7 +130,7 @@ def make_train_env(env_name, seed, n_threads, env_args):
 
         return init_env
 
-    if env_name == "smac_dual" or env_name == "magents_dual":
+    if env_name == "smac_dual" or env_name == "magents_dual" or env_name == "smacv2_dual":
         if n_threads == 1:
             return ShareDummyVecDualEnv([get_env_fn(0)])
         else:
@@ -154,6 +158,10 @@ def make_eval_env(env_name, seed, n_threads, env_args):
                 from amb.envs.smacv2.smacv2_env import SMACv2Env
 
                 env = SMACv2Env(env_args)
+            elif env_name == "smacv2_dual":
+                from amb.envs.smacv2.smacv2_dual_env import SMACv2DualEnv
+
+                env = SMACv2DualEnv(env_args)
             elif env_name == "mamujoco":
                 from amb.envs.mamujoco.mamujoco_env import (
                     MAMujocoEnv,
@@ -192,7 +200,7 @@ def make_eval_env(env_name, seed, n_threads, env_args):
 
         return init_env
 
-    if env_name == "smac_dual" or env_name == "magents_dual":
+    if env_name == "smac_dual" or env_name == "magents_dual" or env_name == "smacv2_dual":
         if n_threads == 1:
             return ShareDummyVecDualEnv([get_env_fn(0)])
         else:
@@ -227,6 +235,12 @@ def make_render_env(env_name, seed, env_args):
         from amb.envs.smacv2.smacv2_env import SMACv2Env
 
         env = SMACv2Env(args=env_args)
+        manual_render = False
+        manual_delay = False
+    elif env_name == "smacv2_dual":
+        from amb.envs.smacv2.smacv2_dual_env import SMACv2DualEnv
+
+        env = SMACv2DualEnv(args=env_args)
         manual_render = False
         manual_delay = False
     elif env_name == "mamujoco":

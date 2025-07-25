@@ -77,6 +77,8 @@ def get_task_name(env, env_args):
         task = env_args["map_name"]
     elif env == "smacv2":
         task = env_args["map_name"]
+    elif env == "smacv2_dual":
+        task = env_args["map_name"]
     elif env == "mamujoco":
         task = f"{env_args['scenario']}-{env_args['agent_conf']}"
     elif env == "pettingzoo_mpe":

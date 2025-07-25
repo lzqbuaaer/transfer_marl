@@ -1,0 +1,5 @@
+map_name: protoss_5_vs_5_dual
+reverse_team: True
+multi_map_alignment: True
+angel_obs_align_v1: True
+demon_obs_align_v1: False

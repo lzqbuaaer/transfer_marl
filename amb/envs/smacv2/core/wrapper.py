@@ -95,3 +95,18 @@ class StarCraftCapabilityEnvWrapper(MultiAgentEnv):
 
     def close(self):
         return self.env.close()
+    
+    def get_stats(self):
+        return self.env.get_stats()
+    
+    @property
+    def obs_own_feat(self):
+        return self.env.obs_own_feat
+    
+    @property
+    def obs_enemy_feat(self):
+        return self.env.obs_enemy_feat
+    
+    @property
+    def obs_ally_feat(self):
+        return self.env.obs_ally_feat

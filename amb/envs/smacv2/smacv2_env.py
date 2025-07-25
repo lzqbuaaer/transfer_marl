@@ -9,8 +9,13 @@ from gym.spaces import Box, Discrete
 
 
 class SMACv2Env:
-    def __init__(self, args):
+    def __init__(self, args, host=True, ports=None, 
+                 multi_map_alignment=False, obs_align_v1=False):
         self.map_config = self.load_map_config(args["map_name"])
+        self.host = host
+        self.ports = ports
+        self.multi_map_alignment = multi_map_alignment
+        self.obs_align_v1 = obs_align_v1
 
     def step(self, actions):
         processed_actions = np.squeeze(actions, axis=1).tolist()
@@ -38,7 +43,10 @@ class SMACv2Env:
         return obs, state, avail_actions
 
     def seed(self, seed):
-        self.env = StarCraftCapabilityEnvWrapper(seed=seed, **self.map_config)
+        self.env = StarCraftCapabilityEnvWrapper(seed=seed, host=self.host, 
+                                                 multi_map_alignment=self.multi_map_alignment,
+                                                 obs_align_v1=self.obs_align_v1, 
+                                                 ports=self.ports, **self.map_config)
         env_info = self.env.get_env_info()
         n_actions = env_info["n_actions"]
         state_shape = env_info["state_shape"]
@@ -72,3 +80,13 @@ class SMACv2Env:
 
     def repeat(self, a):
         return [a for _ in range(self.n_agents)]
+
+    def save_replay(self):
+        self.env.save_replay()
+        
+    def get_env_info(self): 
+        return self.observation_space, self.share_observation_space, self.action_space, self.n_agents,  \
+            self.env.obs_own_feat, self.env.obs_enemy_feat, self.env.obs_ally_feat
+
+    def get_stats(self):
+        return self.env.get_stats()

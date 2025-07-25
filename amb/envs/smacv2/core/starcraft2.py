@@ -110,6 +110,10 @@ class StarCraft2Env(MultiAgentEnv):
         debug=False,
         prob_obs_enemy=1.0,
         action_mask=True,
+        host=True,
+        ports=None,
+        multi_map_alignment=False,
+        obs_align_v1=False,
     ):
         """
         Create a StarCraftC2Env environment.
@@ -282,6 +286,8 @@ class StarCraft2Env(MultiAgentEnv):
             if not self.replace_teammates
             else self.capability_config["team_gen"]["n_enemies"]
         )
+        if not host:
+            self.n_agents, self.n_enemies = self.n_enemies, self.n_agents
         self.prob_obs_enemy = prob_obs_enemy
         self.action_mask = action_mask
         self.random_start = "start_positions" in self.capability_config
@@ -318,15 +324,22 @@ class StarCraft2Env(MultiAgentEnv):
         # Map info
         self._agent_race = map_params["a_race"]
         self._bot_race = map_params["b_race"]
-        self.shield_bits_ally = 1 if self._agent_race == "P" else 0
-        self.shield_bits_enemy = 1 if self._bot_race == "P" else 0
+        if host:
+            self.shield_bits_ally = 1 if self._agent_race == "P" else 0
+            self.shield_bits_enemy = 1 if self._bot_race == "P" else 0
+        else:
+            self.shield_bits_ally = 1 if self._bot_race == "P" else 0
+            self.shield_bits_enemy = 1 if self._agent_race == "P" else 0
         # NOTE: The map_type, which is used to initialise the unit
         # type ids, the unit_type_bits and the races, are still properties of the
         # map. This means even the 10gen_{race} maps are limited to the
         # unit types statically defined in the unit type id assignment.
         # Lifting this restriction shouldn't be too much work, I've just
         # not done it.
-        self.unit_type_bits = map_params["unit_type_bits"]
+        if multi_map_alignment: 
+            self.unit_type_bits = 0
+        else:
+            self.unit_type_bits = map_params["unit_type_bits"]
         self.map_type = map_params["map_type"]
         self._unit_types = None
 
@@ -414,6 +427,14 @@ class StarCraft2Env(MultiAgentEnv):
         self._run_config = None
         self._sc2_proc = None
         self._controller = None
+        self.host = host
+        self.ports = ports
+        self.multi_map_alignment = multi_map_alignment
+        self.obs_align_v1 = obs_align_v1
+        
+        self.obs_own_feat = self.get_obs_own_feats_size() + self.get_obs_move_feats_size()
+        self.obs_enemy_feat = self.get_obs_enemy_feats_size()[1]
+        self.obs_ally_feat = self.get_obs_ally_feats_size()[1]
         # Try to avoid leaking SC2 processes on shutdown
         atexit.register(lambda: self.close())
 
@@ -439,27 +460,55 @@ class StarCraft2Env(MultiAgentEnv):
         self._controller = self._sc2_proc.controller
 
         # Request to create the game
-        create = sc_pb.RequestCreateGame(
-            local_map=sc_pb.LocalMap(
-                map_path=_map.path,
-                map_data=self._run_config.map_data(_map.path),
-            ),
-            realtime=False,
-            random_seed=self._seed,
-        )
-        create.player_setup.add(type=sc_pb.Participant)
-        create.player_setup.add(
-            type=sc_pb.Computer,
-            race=races[self._bot_race],
-            difficulty=difficulties[self.difficulty],
-        )
-        self._controller.create_game(create)
+        if self.ports is None:
+            create = sc_pb.RequestCreateGame(
+                local_map=sc_pb.LocalMap(
+                    map_path=_map.path,
+                    map_data=self._run_config.map_data(_map.path),
+                ),
+                realtime=False,
+                random_seed=self._seed,
+            )
+            create.player_setup.add(type=sc_pb.Participant)
+            create.player_setup.add(
+                type=sc_pb.Computer,
+                race=races[self._bot_race],
+                difficulty=difficulties[self.difficulty],
+            )
+            self._controller.create_game(create)
 
-        self.game = sc_pb.RequestJoinGame(
-            race=races[self._agent_race], options=interface_options
-        )
-        join = self.game
-        self._controller.join_game(join)
+            self.game = sc_pb.RequestJoinGame(
+                race=races[self._agent_race], options=interface_options
+            )
+            join = self.game
+            self._controller.join_game(join)
+        else:
+            server_ports = sc_pb.PortSet(game_port=self.ports[0], base_port=self.ports[1])
+            client_ports = sc_pb.PortSet(game_port=self.ports[2], base_port=self.ports[3])
+            if self.host:
+                import os
+                create = sc_pb.RequestCreateGame(
+                    local_map=sc_pb.LocalMap(
+                        map_path=os.environ['SC2PATH'] + '/Maps/' + _map.path, map_data=None
+                    ),
+                    realtime=False,
+                    random_seed=self._seed,
+                )
+                create.player_setup.add(type=sc_pb.Participant)
+                create.player_setup.add(type=sc_pb.Participant)
+                self._controller.create_game(create)
+
+                join = sc_pb.RequestJoinGame(
+                    race=races[self._agent_race], options=interface_options,
+                    server_ports=server_ports, client_ports=[client_ports]
+                )
+                self._controller.join_game(join)
+            else:
+                join = sc_pb.RequestJoinGame(
+                    race=races[self._bot_race], options=interface_options,
+                    server_ports=server_ports, client_ports=[client_ports]
+                )
+                self._controller.join_game(join)
 
         game_info = self._controller.game_info()
         map_info = game_info.start_raw
@@ -645,7 +694,8 @@ class StarCraft2Env(MultiAgentEnv):
             self._obs = self._controller.observe()
         except (protocol.ProtocolError, protocol.ConnectionError):
             self.full_restart()
-            return 0, True, {}
+            return 0, True, {"battle_won": False, "dead_allies": 0, 
+                             "dead_enemies": 0, "episode_limit": False}
 
         self._total_steps += 1
         self._episode_steps += 1
@@ -1118,11 +1168,14 @@ class StarCraft2Env(MultiAgentEnv):
 
     def unit_max_shield(self, unit):
         """Returns maximal shield for a given unit."""
-        if unit.unit_type == 74 or unit.unit_type == self.stalker_id:
+        if unit.unit_type == 74 or unit.unit_type == self.stalker_id or unit.unit_type == self._min_unit_type + 6:
+            assert unit.unit_type == self.ally_unit_map["stalker"] or unit.unit_type == self.enemy_unit_map["stalker"]
             return 80  # Protoss's Stalker
-        elif unit.unit_type == 73 or unit.unit_type == self.zealot_id:
+        elif unit.unit_type == 73 or unit.unit_type == self.zealot_id or unit.unit_type == self._min_unit_type + 7:
+            assert unit.unit_type == self.ally_unit_map["zealot"] or unit.unit_type == self.enemy_unit_map["zealot"]
             return 50  # Protoss's Zealot
-        elif unit.unit_type == 4 or unit.unit_type == self.colossus_id:
+        elif unit.unit_type == 4 or unit.unit_type == self.colossus_id or unit.unit_type == self._min_unit_type + 1:
+            assert unit.unit_type == self.ally_unit_map["colossus"] or unit.unit_type == self.enemy_unit_map["colossus"]
             return 150  # Protoss's Colossus
         else:
             raise Exception("Maximum shield not recognised")
@@ -1564,11 +1617,12 @@ class StarCraft2Env(MultiAgentEnv):
                             e_unit.health / e_unit.health_max
                         )  # health
                         ind += 1
-                        if self.shield_bits_enemy > 0:
-                            max_shield = self.unit_max_shield(e_unit)
-                            enemy_feats[e_id, ind] = (
-                                e_unit.shield / max_shield
-                            )  # shield
+                        if self.multi_map_alignment:
+                            if self.shield_bits_enemy > 0:
+                                max_shield = self.unit_max_shield(e_unit)
+                                enemy_feats[e_id, ind] = (
+                                    e_unit.shield / max_shield
+                                )  # shield
                             ind += 1
 
                     if self.unit_type_bits > 0 and show_enemy:
@@ -1613,11 +1667,12 @@ class StarCraft2Env(MultiAgentEnv):
                             ind += 1
                         elif self.zero_pad_health:
                             ind += 1
-                        if self.shield_bits_ally > 0:
-                            max_shield = self.unit_max_shield(al_unit)
-                            ally_feats[i, ind] = (
-                                al_unit.shield / max_shield
-                            )  # shield
+                        if self.multi_map_alignment:
+                            if self.shield_bits_ally > 0:
+                                max_shield = self.unit_max_shield(al_unit)
+                                ally_feats[i, ind] = (
+                                    al_unit.shield / max_shield
+                                )  # shield
                             ind += 1
                     if self.stochastic_attack and self.observe_attack_probs:
                         ally_feats[i, ind] = self.agent_attack_probabilities[
@@ -1655,9 +1710,10 @@ class StarCraft2Env(MultiAgentEnv):
                 else:
                     own_feats[ind] = self._compute_health(agent_id, unit)
                 ind += 1
-                if self.shield_bits_ally > 0:
-                    max_shield = self.unit_max_shield(unit)
-                    own_feats[ind] = unit.shield / max_shield
+                if self.multi_map_alignment:
+                    if self.shield_bits_ally > 0:
+                        max_shield = self.unit_max_shield(unit)
+                        own_feats[ind] = unit.shield / max_shield
                     ind += 1
 
             if self.stochastic_attack:
@@ -1681,14 +1737,24 @@ class StarCraft2Env(MultiAgentEnv):
                 ind += self.unit_type_bits
 
         if self.obs_starcraft:
-            agent_obs = np.concatenate(
-                (
-                    move_feats.flatten(),
-                    enemy_feats.flatten(),
-                    ally_feats.flatten(),
-                    own_feats.flatten(),
+            if not self.obs_align_v1:
+                agent_obs = np.concatenate(
+                    (
+                        move_feats.flatten(),
+                        enemy_feats.flatten(),
+                        ally_feats.flatten(),
+                        own_feats.flatten(),
+                    )
                 )
-            )
+            else:
+                agent_obs = np.concatenate(
+                    (
+                        ally_feats.flatten(),
+                        enemy_feats.flatten(),
+                        move_feats.flatten(),
+                        own_feats.flatten(),
+                    )
+                )
 
         if self.obs_timestep_number:
             if self.obs_starcraft:
@@ -1900,7 +1966,7 @@ class StarCraft2Env(MultiAgentEnv):
         nf_en = 4 + self.unit_type_bits
 
         if self.obs_all_health:
-            nf_en += 1 + self.shield_bits_enemy
+            nf_en += 1 + (self.shield_bits_enemy if not self.multi_map_alignment else 1)
 
         return self.n_enemies, nf_en
 
@@ -1912,7 +1978,7 @@ class StarCraft2Env(MultiAgentEnv):
         nf_cap = self.get_obs_ally_capability_size()
 
         if self.obs_all_health:
-            nf_al += 1 + self.shield_bits_ally
+            nf_al += 1 + (self.shield_bits_ally if not self.multi_map_alignment else 1)
 
         if self.obs_last_action:
             nf_al += self.n_actions
@@ -1925,7 +1991,7 @@ class StarCraft2Env(MultiAgentEnv):
         """
         own_feats = self.get_cap_size()
         if self.obs_own_health and self.obs_starcraft:
-            own_feats += 1 + self.shield_bits_ally
+            own_feats += 1 + (self.shield_bits_ally if not self.multi_map_alignment else 1)
         if self.conic_fov and self.obs_starcraft:
             own_feats += 2
         if self.obs_own_pos and self.obs_starcraft:
@@ -2294,13 +2360,20 @@ class StarCraft2Env(MultiAgentEnv):
     def _kill_all_units(self):
         """Kill all units on the map. Steps controller and so can throw
         exceptions"""
-        units = [unit.tag for unit in self._obs.observation.raw_data.units]
-        self._kill_units(units)
-        # check the units are dead
-        units = len(self._obs.observation.raw_data.units)
-        while len(self._obs.observation.raw_data.units) > 0:
-            self._controller.step(2)
-            self._obs = self._controller.observe()
+        if self.host:
+            units = [unit.tag for unit in self._obs.observation.raw_data.units]
+            self._kill_units(units)
+            # check the units are dead
+        if self.ports is None:
+            units = len(self._obs.observation.raw_data.units)
+            while len(self._obs.observation.raw_data.units) > 0:
+                self._controller.step(2)
+                self._obs = self._controller.observe()
+        else:
+            units = len(self._obs.observation.raw_data.units)
+            while len(self._obs.observation.raw_data.units) > 0:
+                self._controller.step(self._step_mul)
+                self._obs = self._controller.observe()
 
     def _create_new_team(self, team, episode_config, ally):
         # unit_names = {
@@ -2362,15 +2435,16 @@ class StarCraft2Env(MultiAgentEnv):
             # can use any value for min unit type because
             # it is hardcoded based on the version
             self._init_ally_unit_types(0)
-            self._create_new_team(ally_team, episode_config, ally=True)
-            self._create_new_team(enemy_team, episode_config, ally=False)
+            if self.host:
+                self._create_new_team(ally_team, episode_config, ally=True)
+                self._create_new_team(enemy_team, episode_config, ally=False)
             try:
                 self._controller.step(1)
                 self._obs = self._controller.observe()
             except (protocol.ProtocolError, protocol.ConnectionError):
                 self.full_restart()
                 self.reset(episode_config=episode_config)
-        for i in range(1000):
+        while True:
             # Sometimes not all units have yet been created by SC2
             self.agents = {}
             self.enemies = {}
@@ -2378,7 +2452,7 @@ class StarCraft2Env(MultiAgentEnv):
             ally_units = [
                 unit
                 for unit in self._obs.observation.raw_data.units
-                if unit.owner == 1
+                if unit.owner == (1 if self.host else 2)
             ]
             ally_units_sorted = sorted(
                 ally_units,
@@ -2399,15 +2473,16 @@ class StarCraft2Env(MultiAgentEnv):
                     )
 
             for unit in self._obs.observation.raw_data.units:
-                if unit.owner == 2:
+                if unit.owner == (2 if self.host else 1):
                     self.enemies[len(self.enemies)] = unit
                     if self._episode_count == 0:
                         self.max_reward += unit.health_max + unit.shield_max
 
             if self._episode_count == 0 and not ally_team:
-                min_unit_type = min(
-                    unit.unit_type for unit in self.agents.values()
-                )
+                if self.ports is None:
+                    min_unit_type = min(unit.unit_type for unit in self.agents.values())
+                else:
+                    min_unit_type = min(min(unit.unit_type for unit in self.agents.values()), min(unit.unit_type for unit in self.enemies.values()))
                 self._init_ally_unit_types(min_unit_type)
 
             all_agents_created = len(self.agents) == self.n_agents
@@ -2512,38 +2587,72 @@ class StarCraft2Env(MultiAgentEnv):
                 len(self._controller.data().units) - num_rl_units
             )
 
-            self.baneling_id = self._min_unit_type
-            self.colossus_id = self._min_unit_type + 1
-            self.hydralisk_id = self._min_unit_type + 2
-            self.marauder_id = self._min_unit_type + 3
-            self.marine_id = self._min_unit_type + 4
-            self.medivac_id = self._min_unit_type + 5
-            self.stalker_id = self._min_unit_type + 6
-            self.zealot_id = self._min_unit_type + 7
-            self.zergling_id = self._min_unit_type + 8
+            if self.host:
+                self.baneling_id = self._min_unit_type
+                self.colossus_id = self._min_unit_type + 1
+                self.hydralisk_id = self._min_unit_type + 2
+                self.marauder_id = self._min_unit_type + 3
+                self.marine_id = self._min_unit_type + 4
+                self.medivac_id = self._min_unit_type + 5
+                self.stalker_id = self._min_unit_type + 6
+                self.zealot_id = self._min_unit_type + 7
+                self.zergling_id = self._min_unit_type + 8
 
-            self.ally_unit_map = {
-                "baneling": self.baneling_id,
-                "colossus": self.colossus_id,
-                "hydralisk": self.hydralisk_id,
-                "marauder": self.marauder_id,
-                "marine": self.marine_id,
-                "medivac": self.medivac_id,
-                "stalker": self.stalker_id,
-                "zealot": self.zealot_id,
-                "zergling": self.zergling_id,
-            }
-            self.enemy_unit_map = {
-                "baneling": Zerg.Baneling,
-                "colossus": Protoss.Colossus,
-                "hydralisk": Zerg.Hydralisk,
-                "marauder": Terran.Marauder,
-                "marine": Terran.Marine,
-                "medivac": Terran.Medivac,
-                "stalker": Protoss.Stalker,
-                "zealot": Protoss.Zealot,
-                "zergling": Zerg.Zergling,
-            }
+                self.ally_unit_map = {
+                    "baneling": self.baneling_id,
+                    "colossus": self.colossus_id,
+                    "hydralisk": self.hydralisk_id,
+                    "marauder": self.marauder_id,
+                    "marine": self.marine_id,
+                    "medivac": self.medivac_id,
+                    "stalker": self.stalker_id,
+                    "zealot": self.zealot_id,
+                    "zergling": self.zergling_id,
+                }
+                self.enemy_unit_map = {
+                    "baneling": Zerg.Baneling,
+                    "colossus": Protoss.Colossus,
+                    "hydralisk": Zerg.Hydralisk,
+                    "marauder": Terran.Marauder,
+                    "marine": Terran.Marine,
+                    "medivac": Terran.Medivac,
+                    "stalker": Protoss.Stalker,
+                    "zealot": Protoss.Zealot,
+                    "zergling": Zerg.Zergling,
+                }
+            else:
+                self.baneling_id = Zerg.Baneling
+                self.colossus_id = Protoss.Colossus
+                self.hydralisk_id = Zerg.Hydralisk
+                self.marauder_id = Terran.Marauder
+                self.marine_id = Terran.Marine
+                self.medivac_id = Terran.Medivac
+                self.stalker_id = Protoss.Stalker
+                self.zealot_id = Protoss.Zealot
+                self.zergling_id = Zerg.Zergling
+
+                self.ally_unit_map = {
+                    "baneling": self.baneling_id,
+                    "colossus": self.colossus_id,
+                    "hydralisk": self.hydralisk_id,
+                    "marauder": self.marauder_id,
+                    "marine": self.marine_id,
+                    "medivac": self.medivac_id,
+                    "stalker": self.stalker_id,
+                    "zealot": self.zealot_id,
+                    "zergling": self.zergling_id,
+                }
+                self.enemy_unit_map = {
+                    "baneling": self._min_unit_type,
+                    "colossus": self._min_unit_type + 1,
+                    "hydralisk": self._min_unit_type + 2,
+                    "marauder": self._min_unit_type + 3,
+                    "marine": self._min_unit_type + 4,
+                    "medivac": self._min_unit_type + 5,
+                    "stalker": self._min_unit_type + 6,
+                    "zealot": self._min_unit_type + 7,
+                    "zergling": self._min_unit_type + 8,
+                }
 
         else:
             if self.map_type == "marines":
