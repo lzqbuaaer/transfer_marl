@@ -2124,28 +2124,37 @@ class StarCraft2Env(MultiAgentEnv):
         """Returns the ID of unit type in the given scenario."""
 
         if self.map_type == "protoss_gen":
-            if unit.unit_type in (self.stalker_id, Protoss.Stalker):
+            if unit.unit_type in (self.stalker_id, Protoss.Stalker, self._min_unit_type + 6):
+                assert unit.unit_type == self.ally_unit_map["stalker"] or unit.unit_type == self.enemy_unit_map["stalker"]
                 return 0
-            if unit.unit_type in (self.zealot_id, Protoss.Zealot):
+            if unit.unit_type in (self.zealot_id, Protoss.Zealot, self._min_unit_type + 7):
+                assert unit.unit_type == self.ally_unit_map["zealot"] or unit.unit_type == self.enemy_unit_map["zealot"]
                 return 1
-            if unit.unit_type in (self.colossus_id, Protoss.Colossus):
+            if unit.unit_type in (self.colossus_id, Protoss.Colossus, self._min_unit_type + 1):
+                assert unit.unit_type == self.ally_unit_map["colossus"] or unit.unit_type == self.enemy_unit_map["colossus"]
                 return 2
             raise AttributeError()
         if self.map_type == "terran_gen":
-            if unit.unit_type in (self.marine_id, Terran.Marine):
+            if unit.unit_type in (self.marine_id, Terran.Marine, self._min_unit_type + 4):
+                assert unit.unit_type == self.ally_unit_map["marine"] or unit.unit_type == self.enemy_unit_map["marine"]
                 return 0
-            if unit.unit_type in (self.marauder_id, Terran.Marauder):
+            if unit.unit_type in (self.marauder_id, Terran.Marauder, self._min_unit_type + 3):
+                assert unit.unit_type == self.ally_unit_map["marauder"] or unit.unit_type == self.enemy_unit_map["marauder"]
                 return 1
-            if unit.unit_type in (self.medivac_id, Terran.Medivac):
+            if unit.unit_type in (self.medivac_id, Terran.Medivac, self._min_unit_type + 5):
+                assert unit.unit_type == self.ally_unit_map["medivac"] or unit.unit_type == self.enemy_unit_map["medivac"]
                 return 2
             raise AttributeError()
 
         if self.map_type == "zerg_gen":
-            if unit.unit_type in (self.zergling_id, Zerg.Zergling):
+            if unit.unit_type in (self.zergling_id, Zerg.Zergling, self._min_unit_type + 8):
+                assert unit.unit_type == self.ally_unit_map["zergling"] or unit.unit_type == self.enemy_unit_map["zergling"]
                 return 0
-            if unit.unit_type in (self.hydralisk_id, Zerg.Hydralisk):
+            if unit.unit_type in (self.hydralisk_id, Zerg.Hydralisk, self._min_unit_type + 2):
+                assert unit.unit_type == self.ally_unit_map["hydralisk"] or unit.unit_type == self.enemy_unit_map["hydralisk"]
                 return 1
-            if unit.unit_type in (self.baneling_id, Zerg.Baneling):
+            if unit.unit_type in (self.baneling_id, Zerg.Baneling, self._min_unit_type):
+                assert unit.unit_type == self.ally_unit_map["baneling"] or unit.unit_type == self.enemy_unit_map["baneling"]
                 return 2
             raise AttributeError()
 

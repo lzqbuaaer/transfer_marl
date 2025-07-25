@@ -79,15 +79,15 @@ class SMACv2DualEnv(MultiAgentEnv):
             self.host_multi_map_alignment = False
             self.client_multi_map_alignment = False
         if not self.r:
-            host_obs_align_v1, client_obs_align_v1 = args["angel_obs_align_v1"], args["demon_obs_align_v1"]
+            self.host_obs_align_v1, self.client_obs_align_v1 = args["angel_obs_align_v1"], args["demon_obs_align_v1"]
         else:
-            host_obs_align_v1, client_obs_align_v1 = args["demon_obs_align_v1"], args["angel_obs_align_v1"]
+            self.host_obs_align_v1, self.client_obs_align_v1 = args["demon_obs_align_v1"], args["angel_obs_align_v1"]
         self.host_env = SMACv2Env(self.host_args, host=True, ports=ports, 
                                   multi_map_alignment=self.host_multi_map_alignment,
-                                  obs_align_v1=host_obs_align_v1)
+                                  obs_align_v1=self.host_obs_align_v1)
         self.client_env = SMACv2Env(self.client_args, host=False, ports=ports, 
                                     multi_map_alignment=self.client_multi_map_alignment,
-                                    obs_align_v1=client_obs_align_v1)
+                                    obs_align_v1=self.client_obs_align_v1)
         self.host_pipe, self.host_child_pipe = Pipe()
         self.client_pipe, self.client_child_pipe = Pipe()
         self.p_host_env = Process(target=process_env, args=(self.host_env, self.host_child_pipe))
@@ -121,8 +121,12 @@ class SMACv2DualEnv(MultiAgentEnv):
         self.host_pipe.close()
         self.client_pipe.close()
         ports = [portpicker.pick_unused_port() for _ in range(4)]
-        self.host_env = SMACv2Env(self.host_args, host=True, ports=ports)
-        self.client_env = SMACv2Env(self.client_args, host=False, ports=ports)
+        self.host_env = SMACv2Env(self.host_args, host=True, ports=ports, 
+                                  multi_map_alignment=self.host_multi_map_alignment,
+                                  obs_align_v1=self.host_obs_align_v1)
+        self.client_env = SMACv2Env(self.client_args, host=False, ports=ports, 
+                                    multi_map_alignment=self.client_multi_map_alignment,
+                                    obs_align_v1=self.client_obs_align_v1)
         self.host_pipe, self.host_child_pipe = Pipe()
         self.client_pipe, self.client_child_pipe = Pipe()
         self.p_host_env = Process(target=process_env, args=(self.host_env, self.host_child_pipe))
