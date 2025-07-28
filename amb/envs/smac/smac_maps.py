@@ -41,6 +41,15 @@ map_param_registry = {
         "unit_type_bits": 0,
         "map_type": "marines",
     },
+    "4m_vs_3m_dual": {
+        "n_agents": 4,
+        "n_enemies": 3,
+        "limit": 60,
+        "a_race": "T",
+        "b_race": "T",
+        "unit_type_bits": 0,
+        "map_type": "marines",
+    },
     "8m": {
         "n_agents": 8,
         "n_enemies": 8,
@@ -96,6 +105,15 @@ map_param_registry = {
         "map_type": "marines",
     },
     "11m": {
+        "n_agents": 11,
+        "n_enemies": 11,
+        "limit": 150,
+        "a_race": "T",
+        "b_race": "T",
+        "unit_type_bits": 0,
+        "map_type": "marines",
+    },
+    "11m_dual": {
         "n_agents": 11,
         "n_enemies": 11,
         "limit": 150,
@@ -580,6 +598,15 @@ map_param_registry = {
         "map_type": "stalkers",
     },
     "5m_vs_3m": {
+        "n_agents": 5,
+        "n_enemies": 3,
+        "limit": 60,
+        "a_race": "T",
+        "b_race": "T",
+        "unit_type_bits": 0,
+        "map_type": "marines",
+    },
+    "5m_vs_3m_dual": {
         "n_agents": 5,
         "n_enemies": 3,
         "limit": 60,

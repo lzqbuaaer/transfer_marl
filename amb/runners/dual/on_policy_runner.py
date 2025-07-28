@@ -51,7 +51,7 @@ class OnPolicyRunner(BaseRunner):
                     else:
                         scheme["chosens"] = {"vshape": (self.num_angels + self.num_demons - 1,), "offset": 0}
                 if self.actor_use_dt2gs:
-                    scheme["previous_skills"] = {"vshape": (self.actor_skills_num,), "offset": 1}
+                    scheme["previous_skills"] = {"vshape": (self.angel_actor_skills_num,), "offset": 1}
                 if self.action_type == "Discrete":
                     scheme["available_actions"] = {"vshape": (self.envs.action_space[0][agent_id].n,), "offset": 1, "init_value": 1}
                 self.buffers.append(EpisodeBuffer(algo_args["angel"], self.n_rollout_threads, scheme))
@@ -78,7 +78,8 @@ class OnPolicyRunner(BaseRunner):
 
     def run(self):
         """Run the training (or rendering) pipeline."""
-        if self.algo_args["angel"]['matter_transfer_test']:
+        if self.algo_args["angel"].get('matter_transfer_test', False) or \
+            self.algo_args["demon"].get('matter_transfer_test', False):
             if self.algo_args["angel"]['use_render'] is False:
                 self.logger.init()
                 self.logger.episode_init(0)
@@ -103,10 +104,21 @@ class OnPolicyRunner(BaseRunner):
         self.eval()
 
         obs, share_obs, available_actions = self.init_batch()
+        last_obs = obs
         demon_rnn_states = np.zeros((self.n_rollout_threads, self.num_demons, self.demon_recurrent_n, self.demon_rnn_hidden_size), dtype=np.float32)
         demon_masks = np.ones((self.n_rollout_threads, self.num_demons, 1), dtype=np.float32)
+        last_reward_demon = np.zeros((self.n_rollout_threads, self.num_demons, 1))
         if self.env_belief:
             self.bayesian_update = np.zeros((self.n_rollout_threads), dtype=bool)
+        if self.demon_env_belief:
+            self.demon_bayesian_update = np.zeros((self.n_rollout_threads), dtype=bool)
+            demon_rnn_states_belief = np.zeros((self.n_rollout_threads, self.num_demons, self.demon_recurrent_n, self.demon_rnn_hidden_size), dtype=np.float32)
+            demon_env_belief_training = np.zeros((self.n_rollout_threads, self.num_demons, self.demon_env_belief_dim), dtype=np.float32)
+            demon_env_belief_training[:] = self.demon_env_prior
+        else:
+            demon_env_belief_training = None
+        if self.demon_actor_use_dt2gs:
+            demon_previous_skills = np.zeros((self.n_rollout_threads, self.num_demons, self.demon_actor_skills_num))
 
         episodes = int(self.algo_args["angel"]['num_env_steps']) // self.algo_args["angel"]['episode_length'] // self.algo_args["angel"]['n_rollout_threads']
         
@@ -132,22 +144,44 @@ class OnPolicyRunner(BaseRunner):
                     
                 demon_actions_collector = []
                 for agent_id in range(self.num_demons):
+                    if self.demon_env_belief and (not self.demon_env_belief_matter):
+                        env_belief, rnn_state_belief = self.demons[agent_id].forward_belief(
+                            obs[1][:, agent_id],
+                            last_reward_demon[:, agent_id],
+                            last_obs[1][:, agent_id],
+                            demon_env_belief_training[:, agent_id],
+                            demon_rnn_states_belief[:, agent_id],
+                            demon_masks[:, agent_id],
+                        )
+                        demon_env_belief_training[self.demon_bayesian_update == True, agent_id] = _t2n(env_belief)[self.demon_bayesian_update == True]
+                        demon_rnn_states_belief[self.demon_bayesian_update == True, agent_id] = _t2n(rnn_state_belief)[self.demon_bayesian_update == True]
                     demon_actions, temp_rnn_state = self.demons[agent_id].perform(
                         obs[1][:, agent_id],
                         demon_rnn_states[:, agent_id],
                         demon_masks[:, agent_id],
                         available_actions[1][:, agent_id]
                         if available_actions[1][0] is not None else None,
+                        env_belief = (self.demon_env_belief_ground_truth[:, agent_id] if self.demon_env_belief_matter 
+                                    else demon_env_belief_training[:, agent_id]) if self.demon_env_belief else None,
+                        previous_skills = demon_previous_skills[:, agent_id] if self.demon_actor_use_dt2gs else None,
                         deterministic=False
                     )
+                    if self.demon_actor_use_dt2gs:
+                        demon_actions, skills = demon_actions
+                        demon_previous_skills[:, agent_id] = _t2n(skills)
+                    if self.demon_actor_divide_conquer:
+                        demon_actions, chosen = demon_actions
                     demon_rnn_states[:, agent_id] = _t2n(temp_rnn_state)
                     demon_actions_collector.append(_t2n(demon_actions))
                 demon_actions = np.stack(demon_actions_collector, axis=1)
 
                 # actions: (n_threads, n_agents, action_dim)
+                last_obs = obs
                 obs, share_obs, rewards, dones, infos, available_actions = self.envs.step((angel_actions, demon_actions))
                 if self.env_belief:
                     self.bayesian_update[:] = True
+                if self.demon_env_belief:
+                    self.demon_bayesian_update[:] = True
 
                 assert self.num_angels == rewards[0].shape[1]
                 assert self.num_demons == rewards[1].shape[1]
@@ -155,6 +189,7 @@ class OnPolicyRunner(BaseRunner):
                 if self.reverse_team and self.use_minus_opponent_reward:
                     for process_id in range(rewards[0].shape[0]):
                         rewards[0][process_id, :, :] = -np.mean(rewards[1][process_id])
+                last_reward_demon = rewards[1]
                 
                 filled = np.ones((self.n_rollout_threads, self.num_angels), dtype=np.float32)
 
@@ -162,6 +197,12 @@ class OnPolicyRunner(BaseRunner):
                 demon_rnn_states[dones_env==True] = 0
                 demon_masks = np.ones((self.n_rollout_threads, self.num_demons, 1), dtype=np.float32)
                 demon_masks[dones_env==True] = 0
+                if self.demon_actor_use_dt2gs:
+                    demon_previous_skills[dones_env == True] = 0
+                if self.demon_env_belief:
+                    demon_rnn_states_belief[dones_env == True] = 0
+                    self.demon_bayesian_update[dones_env == True] = False
+                    demon_env_belief_training[dones_env == True, :] = self.demon_env_prior
 
                 data = {
                     "obs": obs[0], "share_obs": share_obs[0], "rewards": rewards[0], "dones": dones[0],
