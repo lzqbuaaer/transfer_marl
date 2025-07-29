@@ -29,6 +29,13 @@ def get_dual_runner(run, algo):
         elif algo == "maddpg" or algo == "qmix" or algo == "vdn" or algo == "iql" or algo == "qtran" or algo == "coma":
             from amb.runners.dual.off_policy_runner import OffPolicyRunner
             return OffPolicyRunner
+    if run == "dual_self_play":
+        if algo == "mappo":
+            from amb.runners.dual.on_policy_self_play_runner import OnPolicySelfPlayRunner
+            return OnPolicySelfPlayRunner
+        elif algo == "maddpg" or algo == "qmix" or algo == "vdn" or algo == "iql" or algo == "qtran" or algo == "coma":
+            from amb.runners.dual.off_policy_runner import OffPolicyRunner
+            return OffPolicyRunner
     if run == "perturbation":
         if algo == "mappo":
             from amb.runners.perturbation.on_policy_runner import OnPolicyRunner

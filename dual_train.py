@@ -47,6 +47,7 @@ def main():
         default="dual",
         choices=[
             "dual",
+            "dual_self_play",
             "perturbation",
             "traitor",
         ],

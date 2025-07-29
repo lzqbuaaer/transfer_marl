@@ -33,11 +33,17 @@ class SMACDualLogger(DualLogger):
             if filled[i]:
                 self.infos[i] = infos[i]
 
-    def episode_log(self, actor_train_infos, critic_train_info, buffers):
+    def episode_log(self, actor_train_infos, critic_train_info, buffers, 
+                    demon_actor_train_infos=None, demon_critic_train_info=None, demon_buffers=None):
         for agent_id in range(len(buffers)):
             actor_train_infos[agent_id]["dead_ratio"] = 1 - buffers[agent_id].data["active_masks"].sum() / (
                 len(buffers) * reduce(lambda x, y: x * y, list(buffers[agent_id].data["active_masks"].shape)))
-        super().episode_log(actor_train_infos, critic_train_info, buffers)
+        if demon_buffers is not None:
+            for agent_id in range(len(demon_buffers)):
+                demon_actor_train_infos[agent_id]["dead_ratio"] = 1 - demon_buffers[agent_id].data["active_masks"].sum() / (
+                    len(demon_buffers) * reduce(lambda x, y: x * y, list(demon_buffers[agent_id].data["active_masks"].shape)))
+        super().episode_log(actor_train_infos, critic_train_info, buffers, 
+                            demon_actor_train_infos, demon_critic_train_info, demon_buffers)
 
         battles_won = []
         battles_game = []

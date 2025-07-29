@@ -68,7 +68,8 @@ class DualLogger:
                     self.episode_lens.append(self.one_episode_len[t].copy())
                     self.one_episode_len[t] = 0
 
-    def episode_log(self, actor_train_infos, critic_train_info, buffers):
+    def episode_log(self, actor_train_infos, critic_train_info, buffers, 
+                    demon_actor_train_infos=None, demon_critic_train_info=None, demon_buffers=None):
         """Log information for each episode."""
         self.end = time.time()
         print(
@@ -91,7 +92,7 @@ class DualLogger:
         critic_train_info["average_step_rewards"] = aver_episode_rewards / average_episode_len
         self.writter.add_scalar("env/train_episode_rewards", aver_episode_rewards, self.timestep)
 
-        self.log_train(actor_train_infos, critic_train_info)
+        self.log_train(actor_train_infos, critic_train_info, demon_actor_train_infos, demon_critic_train_info)
 
         print(
             "Train-time average step reward is {:.4f}, average episode length is {:.4f}, average episode reward is {:.4f}.".format(
@@ -178,17 +179,34 @@ class DualLogger:
             )
             self.log_file.flush()
 
-    def log_train(self, actor_train_infos, critic_train_info):
+    def log_train(self, actor_train_infos, critic_train_info, 
+                  demon_actor_train_infos=None, demon_critic_train_info=None):
         """Log training information."""
         # log actor
         for agent_id in range(self.num_angels):
             for k, v in actor_train_infos[agent_id].items():
-                agent_k = "agent%i/" % agent_id + k
+                if demon_actor_train_infos is not None:
+                    agent_k = "angel/agent%i/" % agent_id + k
+                else:
+                    agent_k = "agent%i/" % agent_id + k
                 self.writter.add_scalar(agent_k, v, self.timestep)
         # log critic
         for k, v in critic_train_info.items():
-            critic_k = "critic/" + k
+            if demon_critic_train_info is not None:
+                critic_k = "angel/critic/" + k
+            else:
+                critic_k = "critic/" + k
             self.writter.add_scalar(critic_k, v, self.timestep)
+        
+        if demon_actor_train_infos is not None:
+            for agent_id in range(self.num_demons):
+                for k, v in demon_actor_train_infos[agent_id].items():
+                    agent_k = "demon/agent%i/" % agent_id + k
+                    self.writter.add_scalar(agent_k, v, self.timestep)
+        if demon_critic_train_info is not None:
+            for k, v in demon_critic_train_info.items():
+                critic_k = "demon/critic/" + k
+                self.writter.add_scalar(critic_k, v, self.timestep)
 
     def log_env(self, env_infos):
         """Log environment information."""

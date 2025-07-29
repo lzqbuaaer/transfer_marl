@@ -195,28 +195,41 @@ class BaseRunner:
         self.critic = self.algo.critic
 
         self.demons = []
-        if self.demon_share_param:
-            agent = ALGO_REGISTRY[args["demon"]].create_agent(
+        if args["run"] == 'dual_self_play':
+            self.demon_algo = ALGO_REGISTRY[args["demon"]](
                 algo_args["demon"],
-                self.envs.observation_space[1][0],
-                self.envs.action_space[1][0],
+                self.num_demons,
+                self.envs.observation_space[1],
+                self.envs.share_observation_space[1][0],
+                self.envs.action_space[1],
                 device=self.device,
-                agent_type="adv_victim",
+                agent_type="adv_traitor",
             )
-            agent.prep_rollout()
-            for agent_id in range(self.num_demons):
-                self.demons.append(agent)
+            self.demons = self.demon_algo.agents
+            self.demon_critic = self.demon_algo.critic
         else:
-            for agent_id in range(self.num_demons):
+            if self.demon_share_param:
                 agent = ALGO_REGISTRY[args["demon"]].create_agent(
                     algo_args["demon"],
-                    self.envs.observation_space[1][agent_id],
-                    self.envs.action_space[1][agent_id],
+                    self.envs.observation_space[1][0],
+                    self.envs.action_space[1][0],
                     device=self.device,
                     agent_type="adv_victim",
                 )
                 agent.prep_rollout()
-                self.demons.append(agent)
+                for agent_id in range(self.num_demons):
+                    self.demons.append(agent)
+            else:
+                for agent_id in range(self.num_demons):
+                    agent = ALGO_REGISTRY[args["demon"]].create_agent(
+                        algo_args["demon"],
+                        self.envs.observation_space[1][agent_id],
+                        self.envs.action_space[1][agent_id],
+                        device=self.device,
+                        agent_type="adv_victim",
+                    )
+                    agent.prep_rollout()
+                    self.demons.append(agent)
 
     def run(self):
         raise NotImplementedError
@@ -534,17 +547,30 @@ class BaseRunner:
             except Exception as e1:
                 self.algo.restore(str(self.algo_args['angel']['model_dir']))            
 
-        if self.algo_args['demon']['model_dir'] is not None:  # restore model
+        if self.args["run"] == 'dual_self_play':
             print("Restore demon model from", self.algo_args['demon']['model_dir'])
-            if self.demon_share_param:
-                self.demons[0].restore(str(self.algo_args['demon']['model_dir']))
-            else:
-                for agent_id in range(self.num_demons):
-                    self.demons[agent_id].restore(os.path.join(self.algo_args['demon']['model_dir'], str(agent_id)))
+            # self.algo.restore(str(self.algo_args['angel']['model_dir']))
+            try:
+                self.demon_algo.restore(os.path.join(self.algo_args['demon']['model_dir'], 'demon'))
+            except Exception as e1:
+                self.demon_algo.restore(str(self.algo_args['demon']['model_dir']))
+        else:
+            if self.algo_args['demon']['model_dir'] is not None:  # restore model
+                print("Restore demon model from", self.algo_args['demon']['model_dir'])
+                if self.demon_share_param:
+                    self.demons[0].restore(str(self.algo_args['demon']['model_dir']))
+                else:
+                    for agent_id in range(self.num_demons):
+                        self.demons[agent_id].restore(os.path.join(self.algo_args['demon']['model_dir'], str(agent_id)))
 
-    def save(self):
+    def save(self, time_step=None):
         """Save the model"""
-        self.algo.save(os.path.join(self.save_dir, "angel"))
+        if time_step is not None:
+            save_dir = os.path.join(self.save_dir, str(time_step))
+            os.makedirs(save_dir, exist_ok=True)
+        else:
+            save_dir = self.save_dir
+        self.algo.save(os.path.join(save_dir, "angel"))
 
         # if self.demon_share_param:
         #     self.demons[0].save(os.path.join(self.save_dir, "demon"))
